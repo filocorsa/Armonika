@@ -46,3 +46,4 @@ Thumbs.db
 
 # Spike 4 build output
 /spikes/04-recognition/target/
+/spikes/04-recognition/__pycache__/
