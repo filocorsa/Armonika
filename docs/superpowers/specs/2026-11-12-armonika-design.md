@@ -87,6 +87,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - **Armonika come servizio pubblico** *(decisa con l'utente)*: il target è il self-hosting per sé, la famiglia e gli amici. Non si costruiscono iscrizione libera, verifica email per sconosciuti, piani, pagamenti, gestione delle segnalazioni di copyright. Il design però non lo impedisce: i limiti di spazio (§8.5) sono generici, così chi vuole offrire un servizio può costruirci sopra i propri piani (la licenza AGPL lo consente, con l'obbligo di pubblicare le modifiche).
 - **Funzioni basate sulla canzone** (es. "mostra tutte le registrazioni di questa canzone"): non ora; il dato si conserva quando MusicBrainz lo fornisce.
 - **Player web nella prima fase**: arriva dopo l'interfaccia di gestione (vedi §9).
+- **Idea per dopo: contribuire ad AcoustID.** Come fa MusicBrainz Picard, Armonika potrebbe inviare ad AcoustID le impronte dei file confermati dall'utente, migliorando il database da cui dipendiamo. Solo su scelta esplicita dell'utente (disattivato di default), non nella prima versione.
 
 ## 5. Anti-obiettivi (cose che lo renderebbero un fallimento)
 
@@ -129,10 +130,15 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - Lettura/scrittura dei tag nei file con **lofty** (MP3/ID3, FLAC, Ogg Vorbis, Opus, M4A/AAC, WAV/AIFF). Sono anche i formati di file accettati.
 - Transcodifica opzionale tramite **ffmpeg** esterno (presente nell'immagine Docker). Di default i file si inviano così come sono, con supporto ai range HTTP per l'avanzamento nella traccia.
 - Riconoscimento: **MusicBrainz** (ricerca di registrazioni ed edizioni per metadati) e **AcoustID** (impronta audio tramite chromaprint, che porta alla registrazione) per i file con tag pessimi, come quelli da YouTube. Va rispettato il limite di MusicBrainz (1 richiesta al secondo, con User-Agent identificativo del progetto). AcoustID richiede una chiave applicazione: il progetto ne registra una propria, sostituibile dall'utente nelle impostazioni. Il riconoscimento richiede internet; senza connessione Armonika continua a funzionare e la coda accetta solo correzioni manuali.
+- **Calcolo dell'impronta audio**: l'algoritmo è **Chromaprint**, creato per AcoustID dallo stesso autore. L'impronta va calcolata in locale, e deve essere identica a quella prodotta dallo strumento ufficiale `fpcalc`, altrimenti AcoustID non la riconosce. Due strade, da scegliere con lo spike 6 (§11):
+  - **rusty-chromaprint**: porting in Rust puro, licenza MIT, versione 0.3 dichiarata "in progress" dall'autore. Non richiede librerie esterne;
+  - **libreria C originale** (`chromaprint`): codice MIT, ma nel complesso da considerare LGPL 2.1 perché include parti di FFmpeg; compatibile con AGPL, ma complica la compilazione multipiattaforma.
+  - In entrambi i casi serve prima **decodificare l'audio** di ogni formato accettato. Da verificare: la libreria Rust di decodifica più usata (Symphonia) potrebbe non supportare Opus, che è proprio il formato tipico dei download da MeTube; in quel caso serve un'alternativa (es. ffmpeg o una libreria Opus dedicata).
 - Per ogni traccia si conservano, quando noti, gli identificativi MusicBrainz di registrazione, edizione, album, canzone e artisti.
 - **Condizioni d'uso dei servizi esterni** (verificate il 2026-11-12):
   - **MusicBrainz**: i dati principali (artisti, registrazioni, edizioni, album) sono CC0, cioè di pubblico dominio; il resto è CC BY-NC-SA 3.0. L'API è gratuita per uso non commerciale, con un limite di circa 1 richiesta al secondo per indirizzo IP e l'obbligo di uno User-Agent che identifichi l'applicazione e un contatto. Chi la usa commercialmente deve accordarsi con la MetaBrainz Foundation.
   - **AcoustID**: gratuito per applicazioni non commerciali, previa registrazione dell'applicazione per ottenere una chiave; l'uso commerciale passa da piani a pagamento di AcoustID OÜ. Limite indicato dalle librerie client: 3 richieste al secondo.
+  - **AcoustID non fa parte di MusicBrainz**: è un servizio separato, gestito da AcoustID OÜ. Il suo database contiene le impronte audio e, per ognuna, gli identificativi delle registrazioni MusicBrainz corrispondenti; MusicBrainz non contiene le impronte. Quindi anche chi usa un mirror locale di MusicBrainz ha bisogno del servizio online di AcoustID per il riconoscimento dal suono.
   - **Cover Art Archive** (copertine collegate a MusicBrainz): le immagini restano dei rispettivi titolari dei diritti; scaricarle per la propria libreria è l'uso comune di strumenti come Picard e beets.
 - Conseguenze per Armonika:
   - ogni installazione fa le richieste dal proprio indirizzo IP, quindi il limite vale per ogni server, non per tutto il progetto;
@@ -408,6 +414,7 @@ L'utente non ha ancora una libreria musicale, quindi:
 3. **Scrittura tag**: lofty su tutti i formati elencati, controllando che i file restino leggibili dalle app comuni e che non si perdano dati (copertine incorporate, tag sconosciuti).
 4. **Riconoscimento**: per quanti file "stile YouTube" AcoustID + MusicBrainz trovano la registrazione giusta, quanto spesso viene scelta l'edizione giusta, e con quali pesi e soglie il punteggio di confidenza di Armonika (§8.2) separa bene le corrispondenze giuste da quelle sbagliate. Uscita: pesi e soglie scritti nel piano, con i numeri misurati.
 5. **Impronta del contenuto**: verificare che l'impronta usata per riconoscere un file spostato da fuori (§8.1) resti uguale quando cambiano solo i tag, su tutti i formati elencati, e quanto costa calcolarla durante la scansione.
+6. **Impronta audio per AcoustID**: rusty-chromaprint contro la libreria C originale. Uscita: la soluzione scelta produce impronte identiche a `fpcalc` su tutti i formati accettati (incluso Opus), con tempi di calcolo misurati.
 
 Gli spike non diventano codice di produzione: ciò che si impara entra nel piano.
 
