@@ -130,6 +130,17 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - Transcodifica opzionale tramite **ffmpeg** esterno (presente nell'immagine Docker). Di default i file si inviano così come sono, con supporto ai range HTTP per l'avanzamento nella traccia.
 - Riconoscimento: **MusicBrainz** (ricerca di registrazioni ed edizioni per metadati) e **AcoustID** (impronta audio tramite chromaprint, che porta alla registrazione) per i file con tag pessimi, come quelli da YouTube. Va rispettato il limite di MusicBrainz (1 richiesta al secondo, con User-Agent identificativo del progetto). AcoustID richiede una chiave applicazione: il progetto ne registra una propria, sostituibile dall'utente nelle impostazioni. Il riconoscimento richiede internet; senza connessione Armonika continua a funzionare e la coda accetta solo correzioni manuali.
 - Per ogni traccia si conservano, quando noti, gli identificativi MusicBrainz di registrazione, edizione, album, canzone e artisti.
+- **Condizioni d'uso dei servizi esterni** (verificate il 2026-11-12):
+  - **MusicBrainz**: i dati principali (artisti, registrazioni, edizioni, album) sono CC0, cioè di pubblico dominio; il resto è CC BY-NC-SA 3.0. L'API è gratuita per uso non commerciale, con un limite di circa 1 richiesta al secondo per indirizzo IP e l'obbligo di uno User-Agent che identifichi l'applicazione e un contatto. Chi la usa commercialmente deve accordarsi con la MetaBrainz Foundation.
+  - **AcoustID**: gratuito per applicazioni non commerciali, previa registrazione dell'applicazione per ottenere una chiave; l'uso commerciale passa da piani a pagamento di AcoustID OÜ. Limite indicato dalle librerie client: 3 richieste al secondo.
+  - **Cover Art Archive** (copertine collegate a MusicBrainz): le immagini restano dei rispettivi titolari dei diritti; scaricarle per la propria libreria è l'uso comune di strumenti come Picard e beets.
+- Conseguenze per Armonika:
+  - ogni installazione fa le richieste dal proprio indirizzo IP, quindi il limite vale per ogni server, non per tutto il progetto;
+  - User-Agent: `Armonika/<versione> ( <url del progetto> )`;
+  - il progetto registra una chiave AcoustID come applicazione open source non commerciale; la chiave è sostituibile nelle impostazioni, e la documentazione deve dire chiaramente che **chi usa Armonika per un servizio commerciale deve usare chiavi e accordi propri** con AcoustID e MetaBrainz;
+  - l'indirizzo del server MusicBrainz è configurabile, così chi vuole può usare un proprio mirror locale di MusicBrainz (senza limiti di richieste);
+  - per il limite di 1 richiesta al secondo, l'analisi della coda e della revisione di tracce avviene **in background**, con avanzamento visibile e risultati salvati (non si rifà la stessa richiesta due volte). Riconoscere una libreria molto grande richiede ore, non secondi: l'interfaccia lo deve dire in modo chiaro;
+  - nella documentazione pubblica e nell'interfaccia si citano MusicBrainz, AcoustID e Cover Art Archive come fonti dei dati.
 - API nativa REST/JSON con specifica **OpenAPI** generata dal codice; aggiornamenti in tempo reale (scansione, download MeTube, coda) via **Server-Sent Events**.
 
 ### 7.3 Ricerca
