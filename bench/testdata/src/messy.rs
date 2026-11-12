@@ -299,19 +299,25 @@ fn copy_new(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn mutate_tags(path: &Path, f: impl FnOnce(&mut Tag)) -> Result<()> {
+/// Apply `f` to every tag in the file (ID3v2 and ID3v1, RIFF INFO and ID3 chunk, and so
+/// on), so that no secondary tag keeps the original values.
+fn mutate_tags(path: &Path, f: impl Fn(&mut Tag)) -> Result<()> {
     let mut tagged =
         lofty::read_from_path(path).with_context(|| format!("reading {}", path.display()))?;
     if tagged.primary_tag().is_none() {
         let tag_type = tagged.primary_tag_type();
         tagged.insert_tag(Tag::new(tag_type));
     }
-    let tag = tagged
-        .primary_tag_mut()
-        .context("no tag available after insert")?;
-    f(tag);
-    tag.save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("writing tags to {}", path.display()))
+    let types: Vec<_> = tagged.tags().iter().map(|t| t.tag_type()).collect();
+    for tag_type in types {
+        let tag = tagged
+            .tag_mut(tag_type)
+            .context("tag disappeared while editing")?;
+        f(tag);
+        tag.save_to_path(path, WriteOptions::default())
+            .with_context(|| format!("writing tags to {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn strip_all_tags(path: &Path) -> Result<()> {
@@ -459,11 +465,15 @@ pub fn build_messy_library(
     out: &Path,
 ) -> Result<Vec<GroundTruth>> {
     let truth_path = out.join("ground_truth.json");
-    if truth_path.exists() {
-        bail!(
-            "{} already exists; remove the output folder before generating again",
-            truth_path.display()
-        );
+    if out.exists() {
+        let mut entries =
+            fs::read_dir(out).with_context(|| format!("reading {}", out.display()))?;
+        if entries.next().is_some() {
+            bail!(
+                "{} is not empty; remove it before generating again",
+                out.display()
+            );
+        }
     }
     // Resolve all sources first so a missing file fails before anything is written.
     let mut files = Vec::with_capacity(manifest.sources.len());

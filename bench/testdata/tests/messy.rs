@@ -368,3 +368,47 @@ fn missing_source_file_is_a_clear_error() {
     let err = build_messy_library(&manifest, sources.path(), out.path()).unwrap_err();
     assert!(format!("{err:#}").contains("s1"), "{err:#}");
 }
+
+#[test]
+fn damages_reach_secondary_id3v1_tag_too() {
+    use lofty::tag::TagType;
+    let dir = tempfile::tempdir().unwrap();
+    let src = make_source(dir.path(), "a", AudioFormat::Mp3, false);
+    // Add an ID3v1 tag carrying the true values next to the ID3v2 tag.
+    let mut v1 = Tag::new(TagType::Id3v1);
+    v1.set_title("Ghosts".to_string());
+    v1.set_artist("Nine Inch Nails".to_string());
+    v1.set_album("Ghosts I-IV".to_string());
+    v1.set_track(3);
+    v1.save_to_path(&src, WriteOptions::default()).unwrap();
+    let tagged = lofty::read_from_path(&src).unwrap();
+    assert!(tagged.tag(TagType::Id3v1).is_some() && tagged.tag(TagType::Id3v2).is_some());
+
+    let dst = tempfile::tempdir().unwrap();
+    let out = one(apply_damage(&src, dst.path(), &Damage::WrongCase).unwrap());
+    let tagged = lofty::read_from_path(&out).unwrap();
+    for t in [TagType::Id3v1, TagType::Id3v2] {
+        let tag = tagged.tag(t).unwrap_or_else(|| panic!("{t:?} missing"));
+        assert_eq!(tag.title().as_deref(), Some("ghosts"), "{t:?}");
+        assert_eq!(tag.artist().as_deref(), Some("nine inch nails"), "{t:?}");
+    }
+    let out = one(apply_damage(&src, dst.path(), &Damage::CompilationCopy).unwrap());
+    let tagged = lofty::read_from_path(&out).unwrap();
+    assert_eq!(
+        tagged.tag(TagType::Id3v1).unwrap().album().as_deref(),
+        Some("Greatest Hits")
+    );
+}
+
+#[test]
+fn build_refuses_non_empty_output_folder() {
+    let sources = tempfile::tempdir().unwrap();
+    make_source(sources.path(), "s1", AudioFormat::Mp3, false);
+    make_source(sources.path(), "s2", AudioFormat::Flac, false);
+    let out = tempfile::tempdir().unwrap();
+    fs::write(out.path().join("orphan.mp3"), b"x").unwrap();
+    let manifest = parse_manifest(MANIFEST).unwrap();
+    let err = build_messy_library(&manifest, sources.path(), out.path()).unwrap_err();
+    assert!(format!("{err:#}").contains("not empty"), "{err:#}");
+    assert!(!out.path().join("ground_truth.json").exists());
+}
