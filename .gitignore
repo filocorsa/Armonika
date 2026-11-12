@@ -32,3 +32,7 @@ Thumbs.db
 
 # Generated benchmark data
 /bench/data/
+
+# Spike downloads (never commit media)
+/spikes/02-metube/downloads/
+/spikes/02-metube/target/
