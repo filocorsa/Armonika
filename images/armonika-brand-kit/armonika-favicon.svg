@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Armonika</title>
+  <defs>
+    <path id="tooth" d="M223 152 L230.5 104 Q231.5 96 239.5 96 L272.5 96 Q280.5 96 281.5 104 L289 152 Z"/>
+  </defs>
+  <circle cx="256" cy="256" r="250" fill="#161616"/>
+  <g fill="#C2452D">
+    <circle cx="256" cy="256" r="118"/>
+    <use href="#tooth"/>
+    <use href="#tooth" transform="rotate(45 256 256)"/>
+    <use href="#tooth" transform="rotate(90 256 256)"/>
+    <use href="#tooth" transform="rotate(135 256 256)"/>
+    <use href="#tooth" transform="rotate(180 256 256)"/>
+    <use href="#tooth" transform="rotate(225 256 256)"/>
+    <use href="#tooth" transform="rotate(270 256 256)"/>
+    <use href="#tooth" transform="rotate(315 256 256)"/>
+  </g>
+  <circle cx="256" cy="256" r="40" fill="#FFFFFF"/>
+</svg>

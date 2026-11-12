@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Web UI
+node_modules/
+/web/dist/
+/web/.svelte-kit/
+
+# Local runtime data (database, caches, music used for testing)
+/data/
+/music/
+/inbox/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Old brand drafts, not part of the project
+/images/old/
