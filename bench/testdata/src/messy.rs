@@ -327,15 +327,19 @@ fn strip_all_tags(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ffmpeg_codec_args(format: AudioFormat) -> &'static [&'static str] {
+/// Encoder argument sets to try, best first. Some ffmpeg builds lack `libvorbis` or
+/// `libopus`; the built-in experimental encoders (which need `-strict -2`) are the fallback.
+fn ffmpeg_codec_args(format: AudioFormat) -> Vec<&'static [&'static str]> {
     match format {
-        AudioFormat::Mp3 => &["-c:a", "libmp3lame"],
-        AudioFormat::Flac => &["-c:a", "flac"],
-        AudioFormat::OggVorbis => &["-c:a", "libvorbis"],
-        AudioFormat::Opus => &["-c:a", "libopus"],
-        AudioFormat::M4a => &["-c:a", "aac"],
-        AudioFormat::Wav => &["-c:a", "pcm_s16le"],
-        AudioFormat::Aiff => &["-c:a", "pcm_s16be"],
+        AudioFormat::Mp3 => vec![&["-c:a", "libmp3lame"]],
+        AudioFormat::Flac => vec![&["-c:a", "flac"]],
+        AudioFormat::OggVorbis => {
+            vec![&["-c:a", "libvorbis"], &["-c:a", "vorbis", "-strict", "-2"]]
+        }
+        AudioFormat::Opus => vec![&["-c:a", "libopus"], &["-c:a", "opus", "-strict", "-2"]],
+        AudioFormat::M4a => vec![&["-c:a", "aac"]],
+        AudioFormat::Wav => vec![&["-c:a", "pcm_s16le"]],
+        AudioFormat::Aiff => vec![&["-c:a", "pcm_s16be"]],
     }
 }
 
@@ -344,30 +348,37 @@ fn ffmpeg_codec_args(format: AudioFormat) -> &'static [&'static str] {
 /// is mp3, m4a or flac; for ogg, opus, wav and aiff it is dropped, because those
 /// containers have no portable attached picture that ffmpeg writes.
 fn transcode(src: &Path, dst: &Path, format: AudioFormat) -> Result<()> {
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-v", "error", "-nostdin", "-n", "-i"])
-        .arg(src)
-        .args(["-map", "0:a:0", "-map_metadata", "0"]);
-    if matches!(
-        format,
-        AudioFormat::Mp3 | AudioFormat::M4a | AudioFormat::Flac
-    ) {
-        cmd.args(["-map", "0:v:0?", "-c:v", "copy"]);
-    }
-    cmd.args(ffmpeg_codec_args(format)).arg(dst);
-    let out = cmd
-        .output()
-        .context("running ffmpeg (is it installed and on PATH?)")?;
-    if !out.status.success() {
+    let mut last_error = String::new();
+    for codec in ffmpeg_codec_args(format) {
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-nostdin", "-n", "-i"])
+            .arg(src)
+            .args(["-map", "0:a:0", "-map_metadata", "0"]);
+        if matches!(
+            format,
+            AudioFormat::Mp3 | AudioFormat::M4a | AudioFormat::Flac
+        ) {
+            cmd.args(["-map", "0:v:0?", "-c:v", "copy"]);
+        }
+        cmd.args(codec).arg(dst);
+        let out = cmd
+            .output()
+            .context("running ffmpeg (is it installed and on PATH?)")?;
+        if out.status.success() {
+            return Ok(());
+        }
         let _ = fs::remove_file(dst);
-        bail!(
-            "ffmpeg failed for {} -> {}: {}",
-            src.display(),
-            dst.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        last_error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if !last_error.contains("Unknown encoder") && !last_error.contains("Encoder not found") {
+            break;
+        }
     }
-    Ok(())
+    bail!(
+        "ffmpeg failed for {} -> {}: {}",
+        src.display(),
+        dst.display(),
+        last_error
+    )
 }
 
 /// Apply one damage to `src` and return the new file(s), written into `dst_dir`.
