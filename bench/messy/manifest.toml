@@ -1,0 +1,23 @@
+# Manifest of the "messy on purpose" library, read by `gen-messy`.
+#
+# Sources are real Creative Commons recordings, downloaded on demand and checked by hash.
+#
+#   [[source]]
+#   id = "nin-ghosts-01"            # unique; the downloaded file is stored as <id>.<ext>
+#   source_url = "https://..."      # direct download link
+#   sha256 = "..."                  # lowercase hex SHA-256 of the downloaded file
+#   license = "CC BY-NC-SA 3.0"
+#   attribution = "Nine Inch Nails, Ghosts I-IV"
+#   recording_mbid = "..."          # MusicBrainz recording id
+#   release_mbid = "..."            # MusicBrainz release id of the edition
+#
+# Damages are applied to the source with the same id, in file order:
+#
+#   [[damage]]
+#   source = "nin-ghosts-01"
+#   kind = "youtube_title"          # youtube_title | strip_tags | strip_cover | split_album
+#                                   # | duplicate_other_format | compilation_copy | wrong_case
+#   format = "mp3"                  # only for duplicate_other_format: mp3 | flac | ogg | opus
+#                                   # | m4a | wav | aiff
+#
+# The sources and damages are added in a later step.
