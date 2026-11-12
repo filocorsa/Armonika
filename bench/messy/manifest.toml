@@ -20,8 +20,6 @@
 #   format = "mp3"                  # only for duplicate_other_format: mp3 | flac | ogg | opus
 #                                   # | m4a | wav | aiff
 #
-# The sources and damages are added in a later step.
-#
 # Every recording_mbid below was checked on MusicBrainz (the recording is on release_mbid)
 # and confirmed by an AcoustID lookup of the downloaded file. Provenance, licenses and
 # verification results are in README.md.
