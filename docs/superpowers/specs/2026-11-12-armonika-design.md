@@ -94,7 +94,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
   - ogni fase si chiude con qualcosa che si usa davvero a casa;
   - le parti rischiose si verificano prima con piccoli test usa-e-getta (spike, §11);
   - i numeri di velocità sono misurati automaticamente.
-- **Rovinare i file dell'utente.** Mai modificare o spostare un file senza conferma esplicita; prima di ogni modifica si salva lo stato precedente (tag originali e percorso originale) in un registro che permette di annullare.
+- **Rovinare i file dell'utente.** Mai modificare o spostare un file di una libreria senza conferma esplicita (l'unica eccezione è la cartella `inbox`, vedi §8.7 punto 11); prima di ogni modifica si salva lo stato precedente (tag originali e percorso originale) in un registro che permette di annullare.
 - **Perdere i dati personali.** Preferiti, playlist, valutazioni e cronologia non devono mai sparire perché un file è stato spostato, ritaggato, sostituito o perché un disco non era montato durante una scansione (§8.1).
 - **Setup che scoraggia.** Nessun passaggio di configurazione in più se non è indispensabile (es. MeTube funziona con il solo indirizzo, senza cartelle condivise).
 - **Diventare "solo un Navidrome in Rust"**: se il riordino della libreria non è usabile, Armonika non ha motivo di esistere.
@@ -121,7 +121,11 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - Conseguenze sul codice: niente percorsi scritti a mano con `/` o `\` (si usano le API di Rust per i percorsi), attenzione a maiuscole/minuscole nei nomi dei file (Windows e macOS non le distinguono, Linux sì) e ai caratteri non ammessi nei nomi dei file su Windows quando Armonika rinomina i file. ffmpeg è incluso nell'immagine Docker; per i binari è una dipendenza opzionale, serve solo per la transcodifica.
 - La CI compila e fa girare i test su Linux, Windows e macOS a ogni modifica, non solo al momento del rilascio.
 - Configurazione: file TOML + variabili d'ambiente (`ARMONIKA_*`), con default sensati; la maggior parte delle impostazioni modificabile anche dall'interfaccia.
-- Cartelle: una cartella per ogni libreria (§8.5), una cartella `inbox` per ogni libreria, `data` (database, cartella di sosta della coda, cache copertine, indice di ricerca). Nel caso più semplice c'è una sola libreria con le cartelle `music` e `inbox`.
+- Cartelle (regole precise in §8.7 punto 2):
+  - una cartella per ogni libreria (§8.5); dentro ognuna, Armonika usa solo la cartella nascosta `.armonika/` (cestino della libreria), che la scansione ignora;
+  - una cartella `inbox` per ogni libreria, **fuori** dalla cartella della libreria (default: `inbox/<nome libreria>` accanto a `data`);
+  - `data`: database, cartella di sosta della coda, cache copertine, indice di ricerca.
+  - Nessuna di queste cartelle può stare dentro la cartella di una libreria, tranne `.armonika/`. Nel caso più semplice c'è una sola libreria con le cartelle `music` e `inbox`.
 
 ### 7.2 Stack backend
 - Runtime async **Tokio**, server HTTP **axum**.
@@ -209,7 +213,7 @@ Stile dei testi: niente segni tipici del testo generato da AI (lineette lunghe, 
 - Quando il file di una traccia **sparisce** (cancellato, oppure disco non montato), la traccia diventa **"mancante"**: non compare più nelle app, ma la traccia e tutti i dati personali collegati restano. Se il file ricompare, la traccia torna com'era. L'admin può eliminare definitivamente le tracce mancanti dall'interfaccia. *(Scelta di Claude.)*
 - Un file nuovo trovato dalla scansione nella cartella di una libreria (senza passare dalla coda) diventa una **nuova traccia**, così com'è (§8.3).
 - **Identità degli album della libreria** *(scelta di Claude, approvata dall'utente)*. Le tracce si raggruppano in album della libreria per edizione MusicBrainz, se nota; altrimenti per titolo dell'album e accredito dell'album nei tag. Ogni album della libreria ha un identificativo stabile, a cui sono legati i preferiti sugli album. Se i tag li cambia Armonika, l'album della libreria mantiene il suo identificativo. Se per modifiche fatte da fuori un album della libreria si divide, l'identificativo (e quindi i preferiti) resta alla parte con più tracce; se due si uniscono, resta quello con più tracce e i preferiti dell'altro si spostano su di esso.
-- **Identità degli artisti** *(scelta di Claude, approvata dall'utente)*. Un artista è identificato dall'identificativo MusicBrainz se noto, altrimenti dal nome normalizzato (maiuscole, spazi e accenti uniformati). Gli accrediti con più artisti vengono separati negli artisti che li compongono, usando gli identificativi MusicBrainz quando presenti e i separatori più comuni (`&`, `feat.`, `,`) altrimenti. I preferiti sugli artisti sono legati all'artista.
+- **Identità degli artisti** *(scelta di Claude, approvata dall'utente)*. Un artista è identificato dall'identificativo MusicBrainz se noto, altrimenti dal nome normalizzato (maiuscole, spazi e accenti uniformati). Gli accrediti con più artisti vengono separati negli artisti che li compongono solo in modo sicuro: con gli identificativi MusicBrainz se presenti, altrimenti con i tag multi-valore degli artisti (es. `ARTISTS`, scritto da Picard e da Armonika), altrimenti solo sui separatori non ambigui (`feat.`, `ft.`, `featuring`, `;`). **Non si divide mai su `&`, `and`, `e` o sulla virgola**, così nomi come "Simon & Garfunkel" o "Earth, Wind & Fire" restano un solo artista. Un accredito non divisibile in modo sicuro resta un solo artista; la revisione di tracce può correggerlo scrivendo gli identificativi. I preferiti sugli artisti sono legati all'artista. Regole di identità complete in §8.7 punto 7.
 
 ### 8.2 La coda "da sistemare" e il riconoscimento
 - In coda finiscono gli elementi in coda: i file caricati dal browser, i file nella cartella `inbox`, i file scaricati da MeTube. Le vie di ingresso sono descritte in §8.5, "Come entra la musica"; il percorso completo in §8.6.
@@ -226,7 +230,7 @@ Stile dei testi: niente segni tipici del testo generato da AI (lineette lunghe, 
 - Applicazione automatica sopra una certa confidenza: **non nella prima versione**; il design la deve rendere possibile in seguito.
 
 ### 8.3 Scrittura sui file già presenti in una libreria
-- Per default Armonika **non scrive** nei file delle tracce già presenti in una libreria (la cartella può essere montata in sola lettura). Scrivere tag o spostare quei file è un'opzione che l'admin attiva esplicitamente, libreria per libreria. Finché la scrittura non è attiva, le tracce di quella libreria non si possono correggere né rivedere (Glossario: i dati musicali di una traccia sono i tag del suo file).
+- Per default Armonika **non scrive** nei file delle tracce già presenti in una libreria (la cartella può essere montata in sola lettura). Scrivere tag o spostare quei file è un'opzione che l'admin attiva esplicitamente, libreria per libreria (livelli esatti in §8.7 punto 4). Finché la scrittura non è attiva, le tracce di quella libreria non si possono correggere né rivedere (Glossario: i dati musicali di una traccia sono i tag del suo file).
 - I file che arrivano dalla coda (browser, MeTube, `inbox`) vengono invece sempre scritti e spostati nella libreria alla conferma, perché è lo scopo dell'importazione. Questo richiede che la cartella della libreria sia scrivibile; se non lo è, Armonika lo segnala e la coda di quella libreria non accetta conferme.
 
 ### 8.4 MeTube
@@ -267,9 +271,10 @@ Questa sezione definisce in modo preciso cosa significa "multi-utente". Le scelt
 - Senza permesso, una libreria è invisibile: le sue tracce non compaiono nella ricerca, nella navigazione, nelle API né nei conteggi.
 
 **Cestino ed eliminazione** *(scelta di Claude)*
+- Il cestino di una libreria sta nella cartella nascosta `.armonika/cestino/` dentro la cartella della libreria (stesso disco, quindi spostamenti istantanei); quello degli elementi in coda scartati sta in `data`. Eliminare tracce o sostituire file richiede che Armonika possa modificare i file esistenti (§8.7 punto 4).
 - Eliminare una traccia sposta il suo file nel cestino della libreria. La traccia risulta "eliminata": sparisce dalle app e dalle playlist, ma i dati personali collegati restano finché il cestino non viene svuotato.
 - Ripristinare dal cestino riporta il file al suo posto e la traccia ricompare, anche nelle playlist, con tutti i dati personali.
-- Svuotare il cestino (solo admin) cancella definitivamente i file e le tracce eliminate, con i dati personali collegati; le tracce spariscono definitivamente dalle playlist.
+- Svuotare il cestino (chi può farlo: vedi §8.7 punto 12) cancella definitivamente i file e le tracce eliminate, con i dati personali collegati; le tracce spariscono definitivamente dalle playlist.
 - Gli elementi in coda scartati e i file sostituiti (§8.6) finiscono anch'essi nel cestino, come file senza traccia.
 
 **Come entra la musica in una libreria** *(decisa con l'utente)*
@@ -321,7 +326,7 @@ Riassunto: **aggiunge musica a una libreria solo chi ha il permesso di gestione 
 **Cambi di permessi e cancellazioni**
 - Se un utente perde l'accesso a una libreria, i suoi preferiti, valutazioni e cronologia sulle tracce di quella libreria restano salvati ma diventano invisibili; tornano se l'accesso viene ridato.
 - Se si elimina un utente, si cancellano i suoi dati personali e le sue playlist (anche quelle pubbliche). Tracce e file non vengono mai toccati.
-- Se si elimina una libreria da Armonika, si rimuovono dal database le sue tracce e i dati collegati, ma **non i file** sul disco.
+- Se si elimina una libreria da Armonika, si rimuovono dal database le sue tracce e i dati collegati, ma **non i file** sul disco, compreso il cestino in `.armonika/`. Gli elementi in coda di quella libreria (in `data`) vengono cancellati. Prima di procedere l'interfaccia mostra quante tracce, playlist ed elementi in coda sono coinvolti e chiede conferma. *(Scelta di Claude.)*
 
 **Come si vede dalle app Subsonic**
 - Ogni libreria corrisponde a una "cartella musicale" Subsonic (`getMusicFolders`). Ogni utente vede solo le proprie, e le app che lo supportano permettono di filtrare per libreria.
@@ -351,7 +356,7 @@ Questa sezione descrive passo per passo cosa succede a un file dall'arrivo fino 
 
 **3. Analisi**
 - Armonika legge i tag di ogni file, ne calcola l'impronta audio, cerca registrazione ed edizione corrispondenti e calcola il proprio punteggio di confidenza (§8.2).
-- **Unità di revisione: il gruppo** *(decisa con l'utente)*. Gli elementi che appartengono alla stessa edizione (stessa cartella, stessi tag di titolo dell'album e artista dell'album, o stessa edizione trovata su MusicBrainz) formano un gruppo e si confermano insieme, come fa beets. Un elemento isolato (es. da MeTube) è un gruppo da uno. Chi gestisce può separare un elemento da un gruppo o unire due gruppi.
+- **Unità di revisione: il gruppo** *(decisa con l'utente)*. I gruppi si formano così (regola precisa in §8.7 punto 15): prima per stessa cartella di provenienza **e** stessi tag di titolo dell'album e artista dell'album; dopo il riconoscimento, Armonika propone di unire i gruppi riconosciuti come la stessa edizione. Si confermano insieme, come fa beets. Un elemento isolato (es. da MeTube) è un gruppo da uno. Chi gestisce può separare un elemento da un gruppo o unire due gruppi.
 - **Controllo doppioni** *(regola decisa con l'utente)*. Un elemento in coda è un doppione se ha **la stessa registrazione e la stessa edizione** di una traccia già presente **nella stessa libreria**.
   - Esempi di doppione: la stessa edizione caricata due volte; la stessa edizione prima in MP3 e poi in FLAC.
   - **Non sono doppioni**: la stessa registrazione in un'altra edizione (es. una raccolta "Greatest Hits" che contiene la registrazione dell'album originale); registrazioni diverse della stessa canzone (studio, live, remix, cover); qualsiasi traccia in un'altra libreria. In questi casi **non si segnala nulla**.
@@ -384,6 +389,74 @@ Questa sezione descrive passo per passo cosa succede a un file dall'arrivo fino 
 - **In una libreria condivisa non esistono proprietari delle tracce**: chiunque abbia la gestione su quella libreria può modificare o eliminare qualsiasi traccia, anche aggiunta da altri. Chi vuole musica che controlla solo lui la mette nella propria libreria personale.
 - Se un utente perde il permesso di gestione o viene eliminato, le tracce che ha aggiunto restano nella libreria.
 - L'operazione resta nel registro e si può annullare (§8.2).
+
+### 8.7 Regole precise per i casi limite
+
+Questa sezione nasce dalla revisione del documento fatta da un lettore esterno il 2026-11-12. Ogni punto chiude un caso che altrimenti il builder dovrebbe indovinare. Salvo dove indicato, sono scelte di Claude.
+
+**1. Quando un file trovato dalla scansione si ricollega a una traccia esistente**
+- Si ricollega automaticamente solo se l'**impronta del contenuto** (§8.1) coincide con quella di una traccia mancante **della stessa libreria**, e c'è una sola traccia candidata. Se le candidate sono più di una (copie identiche), si preferisce quella con lo stesso nome di file; se resta ambiguo, non si ricollega nulla.
+- Se un file viene sostituito a mano con un file diverso (es. un MP3 rimpiazzato da un FLAC), l'impronta cambia: nasce una nuova traccia e la vecchia diventa mancante. Armonika lo rileva (stessa cartella, stessi tag principali o stessa registrazione ed edizione) e **propone** a chi ha la gestione di ricollegare: la nuova traccia prende il posto della vecchia, con i suoi dati personali. Non lo fa mai da solo.
+- Un file spostato a mano in **un'altra libreria** diventa una nuova traccia in quella libreria; quella vecchia diventa mancante. Vale la stessa proposta di ricollegamento, riservata a chi ha la gestione su entrambe le librerie.
+
+**2. Cartelle su disco**
+- Cestino della libreria: `.armonika/cestino/` dentro la cartella della libreria. La scansione ignora tutta la cartella `.armonika/`.
+- `inbox`: sempre fuori dalla cartella della libreria (default `inbox/<nome libreria>` accanto a `data`), configurabile.
+- Cartella di sosta della coda e cestino degli elementi in coda scartati: dentro `data`.
+- Se la libreria è in sola lettura, `.armonika/` non esiste e le operazioni che la richiedono (eliminare, sostituire) non sono disponibili.
+
+**3. Annullare (registro)**
+- Si può annullare **qualsiasi singola operazione**, non solo l'ultima, a una condizione: lo stato attuale dei file coinvolti deve essere ancora quello lasciato dall'operazione (Armonika lo verifica con l'impronta del contenuto e i tag). Se nel frattempo il file è cambiato, l'annullamento è bloccato e l'interfaccia spiega perché.
+- Annullare una **modifica di tag o una rinomina**: si riscrivono i tag precedenti e si riporta il file al percorso precedente.
+- Annullare una **conferma di importazione**: il file torna nella coda come elemento in coda; la traccia creata diventa "eliminata" (come nel cestino), con i dati personali raccolti nel frattempo, che tornano se lo stesso file viene riconfermato come quella traccia.
+- Annullare una **sostituzione**: il vecchio file torna a essere il file della traccia e quello nuovo va nella coda; possibile solo finché il vecchio file è nel cestino.
+- Il registro si conserva per sempre; l'annullamento è possibile finché le condizioni sopra sono vere. Lo stato precedente salva tutti i tag testuali; le copertine incorporate si salvano una sola volta per contenuto (stessa immagine, una sola copia), per contenere lo spazio.
+
+**4. Cosa può fare Armonika sui file esistenti di una libreria** *(da decidere con l'utente, vedi domanda aperta A)*
+
+**5. Doppioni: come si rileva l'audio quasi identico**
+- Per gli elementi in coda si usa l'impronta Chromaprint (quella di AcoustID), già calcolata per il riconoscimento.
+- Per le tracce già in libreria l'impronta Chromaprint **non** si calcola durante la scansione (rallenterebbe troppo, §3). Si calcola in background, a bassa priorità, dopo la scansione, e si salva. Finché non c'è, il confronto si fa solo sulle tracce candidate (stessi tag di album, numero di traccia e durata simile), calcolando l'impronta solo per quelle.
+- L'impronta del contenuto (§8.1) è un'altra cosa: serve solo a riconoscere lo stesso file spostato, e si calcola senza decodificare l'audio (sui dati audio compressi, esclusi i tag).
+
+**6. Doppioni tra tracce già presenti**
+- La revisione di tracce può segnalare due tracce della stessa libreria con stessa registrazione e stessa edizione. Le scelte sono: **unisci** (si tiene un file, scelto da chi gestisce; l'altro va nel cestino), **tieni entrambe**, **ignora**.
+- Unire: resta l'identificativo della traccia di cui si tiene il file. I dati personali si fondono: preferito se lo era almeno una delle due, valutazione più alta, ascolti e cronologia sommati, nelle playlist la traccia rimossa viene sostituita da quella tenuta.
+
+**7. Identità degli artisti**
+- Ogni artista ha un identificativo stabile generato da Armonika; l'identificativo MusicBrainz è un'informazione dell'artista, non la sua identità. Quando Armonika scrive un identificativo MusicBrainz, l'artista resta lo stesso.
+- Un artista con identificativo MusicBrainz su alcune tracce e solo il nome su altre è **un solo artista**, se esiste un solo artista MusicBrainz con quel nome normalizzato nella libreria. Se ce ne sono più di uno (omonimi), le tracce senza identificativo restano su un artista separato finché una revisione non le collega.
+
+**8. Identità delle librerie**
+- Ogni libreria ha un identificativo stabile; nome e percorso sono proprietà modificabili.
+- Il file di configurazione crea le librerie solo al primo avvio (o quelle che non esistono ancora). Da lì in poi la verità è il database, modificabile da comando o dall'interfaccia; se configurazione e database non coincidono, vince il database e Armonika lo segnala nei log.
+- Cambiare il percorso di una libreria mantiene il suo identificativo; la scansione ricollega le tracce per percorso relativo e, se serve, per impronta del contenuto.
+
+**9. Playlist con voci nascoste**
+- Le voci nascoste (librerie senza accesso, tracce mancanti o eliminate) restano salvate nella playlist, nella loro posizione.
+- Nelle API (Subsonic e nativa) gli indici si riferiscono sempre alla lista **visibile** a chi chiama. Una modifica, anche la sostituzione completa della playlist, non tocca mai le voci nascoste a chi la fa: restano dove sono rispetto alle voci visibili vicine.
+
+**10. Album della libreria nei casi limite**
+- Una traccia senza titolo dell'album nei tag appartiene all'album della libreria "[Singoli]" del suo artista dell'accredito principale, uno per artista e per libreria. Così le app Subsonic trovano sempre un album.
+- Tracce della stessa cartella con stesso titolo dell'album e stesso artista dell'album appartengono allo stesso album della libreria anche se solo alcune hanno l'identificativo dell'edizione; la revisione di tracce segnala l'incoerenza.
+
+**11. La cartella `inbox`**
+- `inbox` è una cartella di consegna: mettere un file lì significa consegnarlo ad Armonika. Armonika lo **sposta** nella cartella di sosta (non lo copia, per non ritrovarlo due volte). È l'unica cartella in cui Armonika sposta file senza una conferma per ogni file, ed è scritto chiaramente nella documentazione e accanto all'impostazione.
+- Armonika aspetta che il file sia completo (dimensione stabile per alcuni secondi) prima di prenderlo.
+
+**12. Chi svuota il cestino** *(da decidere con l'utente, vedi domanda aperta B)*
+
+**13. Eliminazione di una libreria**: vedi §8.5, "Cambi di permessi e cancellazioni".
+
+**14. "Conferma così com'è" e "conferma tutti quelli sopra la soglia"**
+- "Conferma così com'è": non cambia i tag del file, ma lo sposta e lo rinomina secondo lo schema dei nomi. Se mancano titolo o artista (obbligatori), la conferma è bloccata e l'elemento resta in coda con l'indicazione di cosa manca.
+- "Conferma tutti quelli sopra la soglia": per ogni gruppo sopra la soglia scrive i tag e gli identificativi MusicBrainz proposti, poi sposta e rinomina. I gruppi con doppioni o con campi obbligatori mancanti vengono esclusi e restano in coda.
+
+**15. Formazione dei gruppi**
+- Prima del riconoscimento: stesso gruppo se **stessa cartella di provenienza e** stessi tag di titolo dell'album e artista dell'album. Un file senza titolo dell'album è un gruppo da solo.
+- Dopo il riconoscimento: Armonika propone di unire i gruppi riconosciuti come la stessa edizione, e di separare un gruppo i cui file risultano appartenere a edizioni diverse. Chi gestisce accetta o rifiuta la proposta.
+
+**16. Separazione degli accrediti**: vedi §8.1, "Identità degli artisti" (mai su `&`, `and`, `e` o virgola senza dati sicuri).
 
 ## 9. Fasi
 
