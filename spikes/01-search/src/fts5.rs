@@ -19,7 +19,7 @@ pub enum Strategy {
 
 pub fn db_path(kind: &str, prefold: bool) -> PathBuf {
     let mode = if prefold { "prefold" } else { "native" };
-    data_dir().join("search-fts5").join(format!("{kind}-{mode}.db"))
+    data_dir().join(format!("search-fts5{}", suffix())).join(format!("{kind}-{mode}.db"))
 }
 
 const GROUPS: [(&str, &[&str]); 3] = [

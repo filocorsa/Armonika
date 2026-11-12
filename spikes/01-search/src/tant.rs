@@ -17,8 +17,12 @@ const GROUPS: [(&str, &[&str]); 3] = [
     ("artists", &["name"]),
 ];
 
+pub fn root() -> PathBuf {
+    data_dir().join(format!("search-tantivy{}", suffix()))
+}
+
 pub fn dir(g: &str) -> PathBuf {
-    data_dir().join("search-tantivy").join(g)
+    root().join(g)
 }
 
 fn analyzer() -> TextAnalyzer {

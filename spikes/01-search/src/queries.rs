@@ -143,7 +143,7 @@ pub fn build(data: &Data) -> QuerySet {
 }
 
 pub fn path() -> std::path::PathBuf {
-    data_dir().join("search-queries.json")
+    data_dir().join(format!("search-queries{}.json", suffix()))
 }
 
 pub fn load() -> QuerySet {

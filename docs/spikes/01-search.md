@@ -1,10 +1,12 @@
 # Spike 1: motore di ricerca (SQLite FTS5 contro Tantivy)
 
-Decisione: **Tantivy**. FTS5 non rispetta la soglia di latenza sulle query con errore di battitura (p95 78,6 ms contro il limite di 50 ms); Tantivy rispetta tutte le soglie con ampio margine (p95 massimo circa 4 ms). La ricerca resta dietro l'interfaccia `SearchIndex`, quindi il motore e' sostituibile.
+Decisione: **Tantivy**. FTS5 non rispetta la soglia di latenza sulle query con errore di battitura (p95 78,6 ms contro il limite di 50 ms); Tantivy rispetta tutte le soglie con ampio margine (p95 massimo circa 4 ms) su entrambi gli insiemi di dati, quello degenere e quello con vocabolario realistico. La ricerca resta dietro l'interfaccia `SearchIndex`, quindi il motore e' sostituibile.
 
 ## Cosa e' stato misurato
 
-- Dati: `bench/data/big-100k/manifest.json`, 100.000 tracce, 10.677 album, 4.476 artisti (circa il 10% dei nomi con accenti o CJK). Dati sintetici: il vocabolario dei titoli e' piccolo, quindi molte parole compaiono in migliaia di tracce (caso sfavorevole per le liste di occorrenze).
+- Dati (due insiemi, entrambi 100.000 tracce, solo metadati, nessun file audio):
+  - `big-100k` (manifest del Task 4): 9.984 album, 4.477 artisti, circa il 10% dei titoli con accenti o CJK. **Molto degenere**: solo 304 parole distinte in titoli, artisti e album, 25.706 titoli distinti (un titolo si ripete 239 volte).
+  - `realistic` (generato dallo spike, `gen-realistic`, seed `20261113`): pseudo-parole da sillabe casuali, frequenza di tipo Zipf, 60.038 parole distinte, 99.933 titoli distinti (massimo 9 ripetizioni), 12.328 album, 4.990 artisti, 11,9% dei titoli con caratteri non ASCII (accenti, ø, ł, CJK). Le query sono generate allo stesso modo (stessa funzione, stesso seed).
 - Cosa si cerca: un'unica ricerca restituisce tre gruppi (tracce, album della libreria, artisti), ognuno con i primi 10 risultati. La latenza misurata e' quella dell'intera ricerca (tre gruppi, recupero dei testi dei risultati e riordino incluso).
 - Bersagli: 200, con seed fisso `20261112` (generatore splitmix64, in `src/queries.rs`): 100 tracce, 50 album, 50 artisti. Il 30% di ogni gruppo e' scelto tra i nomi con accenti che si possono togliere (per avere abbastanza query `diacritics`), il resto a caso tra gli altri.
 - Query per ogni bersaglio, uguali per entrambi i motori (salvate in `bench/data/search-queries.json`):
@@ -90,13 +92,58 @@ Si sceglie FTS5 se p95 < 50 ms per tutti i tipi e recall@10 >= 0,9 per `typo` e 
 
 Perche' FTS5 e' lento sul trigram: l'OR dei trigrammi deve scorrere le liste di occorrenze, e con questi dati anche i trigrammi "rari" compaiono in migliaia di tracce; la potatura ha ridotto la latenza solo in parte (`multiword` da 117 a 37 ms p95, `typo` da 94 a 79 ms). Non e' stato provato un indice di vocabolario separato con distanza di edit (stile spellfix): e' l'unica strada ancora aperta per FTS5 e comporterebbe codice nostro da mantenere; con Tantivy la tolleranza ai refusi e' gia' nel motore.
 
+## Seconda misura: vocabolario realistico
+
+Il manifest `big-100k` ha solo 304 parole distinte, quindi e' un caso sfavorevole in due direzioni opposte (vedi i limiti). Per questo lo stesso confronto e' stato rifatto su un insieme `realistic` (60.038 parole distinte, quasi tutti i titoli unici), solo per le varianti che contano: FTS5 unicode61, FTS5 cascata (con trigram potato), FTS5 unicode61 solo tokenizer (`native`) e Tantivy. Stesse regole di misura, stessa macchina. Le query sono 4.305 `prefix` (i nomi sono piu' lunghi), 200 `typo`, 60 `diacritics`, 200 `multiword`.
+
+| motore | tipo | p50 | p95 | recall@10 | native@10 | cand@50 |
+|---|---|---|---|---|---|---|
+| FTS5 unicode61 (prefold) | prefix | 1,38 | 18,35 | 0,807 | 0,801 | 0,876 |
+| FTS5 unicode61 (prefold) | typo | 0,31 | 1,22 | 0,035 | 0,035 | 0,035 |
+| FTS5 unicode61 (prefold) | diacritics | 0,91 | 3,68 | 1,000 | 1,000 | 1,000 |
+| FTS5 unicode61 (prefold) | multiword | 1,15 | 5,26 | 1,000 | 1,000 | 1,000 |
+| FTS5 cascade potata | prefix | 20,72 | 52,34 | 0,807 | 0,801 | 0,876 |
+| FTS5 cascade potata | typo | 31,50 | 63,92 | 0,975 | 0,960 | 0,975 |
+| FTS5 cascade potata | diacritics | 25,94 | 50,22 | 1,000 | 1,000 | 1,000 |
+| FTS5 cascade potata | multiword | 29,38 | 48,30 | 1,000 | 1,000 | 1,000 |
+| FTS5 unicode61 (solo tokenizer) | diacritics | 0,68 | 3,26 | 0,883 | 0,883 | 0,883 |
+| **Tantivy** | prefix | 1,48 | 3,77 | 0,785 | 0,748 | 0,828 |
+| **Tantivy** | typo | 1,46 | 2,66 | 0,975 | 0,925 | 0,980 |
+| **Tantivy** | diacritics | 1,57 | 2,56 | 1,000 | 1,000 | 1,000 |
+| **Tantivy** | multiword | 2,30 | 3,52 | 1,000 | 1,000 | 1,000 |
+
+| motore | build (s) | su disco (MiB) | RAM a riposo (MiB) | RAM dopo le query (MiB) |
+|---|---|---|---|---|
+| FTS5 unicode61 (prefold) | 1,9 | 32,1 | 7,9 | 13,8 |
+| FTS5 cascade (prefold) | 3,9 | 73,9 | 8,0 | 16,2 |
+| FTS5 unicode61 (native) | 1,6 | 24,4 | 7,9 | 13,8 |
+| Tantivy | 2,0 | 9,1 | 8,3 | 23,7 |
+
+Confronto tra i due insiemi (p95 in ms, Tantivy): prefix 4,05 contro 3,77; typo 4,05 contro 2,66; diacritics 2,00 contro 2,56; multiword 3,03 contro 3,52. Con 200 volte piu' parole distinte (da 304 a 60.038) la latenza di Tantivy resta dello stesso ordine: i p50 passano da 0,8-1,4 ms a 1,5-2,3 ms (un po' piu' alti, soprattutto `multiword` e `diacritics`) e i p95 restano sotto i 4,1 ms. Il recall `typo` di Tantivy resta 0,975 (0,970 prima) e il recall di FTS5 cascata sale da 0,925 a 0,975; i prefissi migliorano per tutti (da 0,61 a circa 0,8) perche' i titoli sono quasi tutti unici e i prefissi lunghi identificano meglio la traccia.
+
+Decisione con la stessa regola, su entrambi gli insiemi:
+
+| insieme | FTS5 (migliore per tipo; cascata utilizzabile) | Tantivy |
+|---|---|---|
+| `big-100k` | typo p95 78,6 ms (cascata), recall typo 0,925: NON rispetta | p95 max 4,05 ms, recall typo 0,970, diacritics 1,000: rispetta |
+| `realistic` | typo p95 63,9 ms (cascata), recall typo 0,975: NON rispetta (anche prefix p95 52,3 ms con la cascata) | p95 max 4,02 ms (prefix 9+ car.), recall typo 0,975, diacritics 1,000: rispetta |
+
+La decisione non cambia: Tantivy. Tantivy non si avvicina ai 50 ms su nessuno dei due insiemi (margine di oltre 10 volte). FTS5 resta fuori soglia sul `typo` anche con un vocabolario realistico (63,9 ms), anche se meno che sui dati degeneri.
+
+La decisione regge anche guardando solo l'ordine nativo (colonna `native@10`, senza il riordino comune): per `typo` Tantivy 0,945 (`big-100k`) e 0,925 (`realistic`) contro FTS5 cascata 0,885 e 0,960. In altre parole sul recall nativo FTS5 con l'insieme realistico e' pari o migliore, ma la regola ha due condizioni e FTS5 fallisce la latenza, non il recall.
+
 ## Limiti e note oneste
 
-- Dati sintetici (vocabolario piccolo): su una libreria reale i trigrammi sarebbero piu' selettivi e FTS5 potrebbe essere piu' veloce; non e' stato misurato.
-- Il tokenizer di Tantivy usato (`SimpleTokenizer`) tratta una sequenza di caratteri CJK come un'unica parola: la ricerca per sottostringa CJK non e' coperta (FTS5 trigram la copre, se la sottostringa ha almeno 3 caratteri). Il testo CJK e' ~un decimo dei nomi nei dati e non e' stato testato come tipo di query a parte.
+- **Insieme `big-100k` degenere, in entrambe le direzioni.** Solo 304 parole distinte e 25.706 titoli distinti su 100.000 tracce (un titolo con 239 ripetizioni). Svantaggia FTS5 (liste di occorrenze enormi per trigrammi e parole, quindi trigram lento) ma favorisce anche Tantivy: la `FuzzyTermQuery` percorre il dizionario dei termini, quindi costo e numero di quasi-corrispondenze crescono con il vocabolario, e con 304 parole ci sono pochissime parole simili tra loro; inoltre il successo e' deciso per nome e, con molti titoli ripetuti, qualunque risultato con lo stesso nome vale. Il recall e' probabilmente gonfiato per entrambi i motori. Per questo e' stata aggiunta la seconda misura sopra: i numeri di `big-100k` ("4 ms, recall 0,97") sono un limite superiore, non una previsione.
+- Anche l'insieme `realistic` e' sintetico: pseudo-parole senza struttura linguistica, Zipf con esponente 1, album e artisti uniformi per costruzione. Una libreria reale puo' avere piu' ripetizioni (compilation, titoli comuni) e piu' parole simili tra loro; Phase 1 deve rimisurare su una libreria vera.
+- Diacritics: il recall 1,000 di FTS5 con testo ripulito in Rust e' vero per costruzione (stessa funzione `fold()` che genera le query); il dato reale di FTS5 con il solo tokenizer e' 0,90 su `big-100k` e 0,883 su `realistic` (non riduce ø e ł). Tantivy (`AsciiFoldingFilter`) ha 1,000 su entrambi.
+- Dimensioni dei campioni: n = 60 (`diacritics`) e n = 200 (`typo`, `multiword`) danno un'incertezza di circa +/-0,05-0,08 sul recall; quindi FTS5 trigram `typo` 0,92 su `big-100k` e' entro il rumore di 0,9. Non e' su questo che si decide: la regola cade sulla latenza.
+- La decisione regge anche su `native@10` (senza riordino comune): `typo` Tantivy 0,945 contro FTS5 0,88-0,885 su `big-100k`.
+- Il tokenizer di Tantivy usato (`SimpleTokenizer`) tratta una sequenza di caratteri CJK come un'unica parola: la ricerca per sottostringa CJK non e' coperta (FTS5 trigram la copre, se la sottostringa ha almeno 3 caratteri). Il testo CJK non e' stato testato come tipo di query a parte.
 - Il recall dei prefissi (prefix) non ha soglia; vedi la nota sopra.
 - Il riordino comune migliora entrambi i motori; i dati grezzi del motore da solo sono nelle colonne `native@10` e `cand@50`.
 - Le latenze sono lato motore (nessuna rete, nessun HTTP); la soglia del design e' lato server.
+- Non e' stato provato un indice di vocabolario separato con distanza di edit per FTS5 (stile spellfix).
 
 ## Come riprodurre
 
@@ -107,7 +154,13 @@ cd spikes/01-search
 cargo run --release -- all
 ```
 
-Genera le query (seed 20261112), costruisce gli indici sotto `bench/data/` (git-ignorato), esegue le misure (un processo per motore, circa 15 minuti, la maggior parte per le varianti trigram) e stampa le tabelle. Singoli passi: `queries`, `build fts5`, `build tantivy`, `bench <motore>`, `report` (vedi l'intestazione di `src/main.rs`). I risultati grezzi sono in `bench/data/search-results/*.json`.
+Genera le query (seed 20261112), costruisce gli indici sotto `bench/data/` (git-ignorato), esegue le misure (un processo per motore, circa 15 minuti, la maggior parte per le varianti trigram) e stampa le tabelle. Il secondo insieme (vocabolario realistico, circa 3 minuti):
+
+```
+cargo run --release -- all-realistic
+```
+
+genera `bench/data/realistic/manifest.json` (seed 20261113), stampa le statistiche del vocabolario (`stats`) e rifa le misure per le quattro varianti chiave, con indici, query e risultati in cartelle con suffisso `-realistic` sotto `bench/data/`. Singoli passi: `queries`, `build fts5`, `build tantivy`, `bench <motore>`, `report` (vedi l'intestazione di `src/main.rs`). I risultati grezzi sono in `bench/data/search-results/*.json`.
 
 ## Conseguenze per il design
 

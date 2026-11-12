@@ -5,11 +5,14 @@
 //!   spike-search queries              generate bench/data/search-queries.json
 //!   spike-search build <fts5|tantivy> [prefold|native]
 //!   spike-search bench <engine>       engine: tantivy | fts5-{unicode,trigram,cascade} | fts5n-{...}
+//!   spike-search all-realistic        generate the realistic-vocabulary dataset, re-run the key engines
+//!   spike-search stats                vocabulary statistics of the current dataset
 //!   spike-search report               print markdown tables from stored results
 
 mod common;
 mod fts5;
 mod queries;
+mod realistic;
 mod tant;
 
 use common::*;
@@ -32,7 +35,7 @@ const ENGINES: [&str; 9] = [
 ];
 
 fn results_dir() -> PathBuf {
-    let d = data_dir().join("search-results");
+    let d = data_dir().join(format!("search-results{}", suffix()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -124,7 +127,7 @@ fn bench(engine: &str) {
     // fts5f / fts5n use all trigrams; fts5- prunes to the rarest ones
     let prune = engine.starts_with("fts5-");
     let (idx, size, build_secs): (Box<dyn SearchIndex>, u64, f64) = if engine == "tantivy" {
-        let size = dir_size(&data_dir().join("search-tantivy"));
+        let size = dir_size(&tant::root());
         (Box::new(tant::Tant::open()), size, *build.get("tantivy").unwrap_or(&f64::NAN))
     } else {
         let strat = match engine.split('-').nth(1).unwrap() {
@@ -295,6 +298,8 @@ fn main() {
             record_build("tantivy", d.as_secs_f64());
         }
         ["bench", e] => bench(e),
+        ["gen-realistic"] => realistic::generate(),
+        ["stats"] => realistic::stats(),
         ["report"] => report(),
         ["all"] => {
             run_self(&["queries"]);
@@ -304,6 +309,26 @@ fn main() {
                 run_self(&["bench", e]);
             }
             run_self(&["report"]);
+        }
+        ["all-realistic"] => {
+            let exe = std::env::current_exe().unwrap();
+            let run = |args: &[&str]| {
+                let st = std::process::Command::new(&exe)
+                    .args(args)
+                    .env("ARMONIKA_SEARCH_DATASET", "realistic")
+                    .status()
+                    .unwrap();
+                assert!(st.success());
+            };
+            run(&["gen-realistic"]);
+            run(&["stats"]);
+            run(&["queries"]);
+            run(&["build", "fts5"]);
+            run(&["build", "tantivy"]);
+            for e in ["fts5-unicode", "fts5-cascade", "fts5n-unicode", "tantivy"] {
+                run(&["bench", e]);
+            }
+            run(&["report"]);
         }
         _ => eprintln!("see the header of src/main.rs"),
     }
