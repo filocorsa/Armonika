@@ -6,22 +6,27 @@ Data: 2026-11-12. Obiettivo (design §7.2 e §11, spike 6): scegliere come decod
 
 **Symphonia 0.6.1 per tutti i formati tranne Opus, `opus-pure` 0.2.3 per Opus, `rusty-chromaprint` 0.3.0 con `Configuration::preset_test2()` per l'impronta.** Nessuna dipendenza C, nessun processo esterno.
 
+La scelta è definitiva solo dopo la risposta dell'utente alla domanda su HE-AAC (§6): se HE-AAC va garantito, serve un ripiego (ffmpeg esterno o adapter FDK) e la regola va rivalutata.
+
 Regola del piano, applicata alla lettera:
 
 | Criterio | Risultato della combinazione scelta |
 |---|---|
-| Decodifica il 100% dei formati accettati | Sì sui 57 file provati (MP3, FLAC, Ogg Vorbis, Opus, M4A AAC-LC, M4A ALAC, WAV, AIFF): 57 su 57. **HE-AAC non provato** (nessun file disponibile, vedi §6): è una domanda aperta per l'utente. |
+| Decodifica il 100% dei formati accettati | Sì per i profili provati (AAC-LC, ALAC): 57 file su 57 (MP3, FLAC, Ogg Vorbis, Opus, M4A AAC-LC, M4A ALAC, WAV, AIFF). Se HE-AAC è nel perimetro, la combinazione scelta non soddisfa la regola senza un ripiego (§6). |
 | Stesso primo risultato AcoustID di `fpcalc` in almeno 19 casi su 20 | Sì: **20 su 20**, e in tutti e 20 la registrazione attesa (da `ground_truth.json`) è nel primo risultato. |
 | Compila sui tre sistemi | Sì: la variante senza libopus compila su ubuntu-latest, windows-latest, macos-latest (2 esecuzioni su 2). |
 | A parità, senza dipendenze C | Sì: è l'unica combinazione completa senza C e senza processi esterni. |
 
 Anche le altre due varianti Opus complete (libopus tramite adapter, ffmpeg esterno) passano la regola sui 20 file, quindi la parità c'è e decide la preferenza per il Rust puro. In più la variante libopus ha perso audio su un file (§4.3) e `opus-decoder` è circa 140 volte più lento di `opus-pure` (§5), quindi non sono solo equivalenti ma peggiori.
 
-Cose da fare nella fase di implementazione (non bloccano la scelta):
+Cose da fare nella fase di implementazione (tranne il punto 2, non bloccano la scelta):
 
 1. **M4A AAC: applicare a mano l'edit list (`elst`).** Symphonia 0.6.1 la ignora, quindi i 1024 campioni di priming dell'encoder restano in testa. L'impronta scende dal 99,4% medio al 97,2% medio di bit uguali con `fpcalc`; AcoustID dà comunque la stessa registrazione (4 su 4) ma con punteggio più basso (fino a 0,963 contro 0,984). Togliendo i 1024 campioni la somiglianza torna identica a quella di ffmpeg (§4.2). Va letto il `media_time` dell'edit list, non scritto 1024 fisso: con ALAC togliere 1024 campioni peggiora (99,02% scende a 96,89%).
 2. **HE-AAC:** Symphonia dichiara solo AAC-LC. Serve una decisione dell'utente (§6).
 3. Seguire le versioni giovani: `opus-pure` (prima 0.2.0 il 2026-08-31) e `rusty-chromaprint` 0.3.0 (ottobre 2024, nessuna versione dopo).
+4. La correttezza di `opus-pure` è provata solo in modo indiretto: impronte e risultati AcoustID equivalenti su 6 file creati con una sola configurazione di encoder, senza confronto diretto del PCM con libopus; SILK e modalità ibrida, mono, multicanale e flussi Ogg concatenati non sono provati. Un corpus di file Opus nelle varie modalità è da fare nella fase 2.
+5. WAV e AIFF sono provati solo con un file sintetico a 16 bit ciascuno: WAV a 24 bit, WAV in virgola mobile e AIFF-C non sono provati.
+6. Il "primo risultato" AcoustID usa la prima registrazione (`recs[0]`) del risultato migliore, ma AcoustID non ordina le registrazioni dentro un risultato: nella fase 2 il confronto va fatto sugli insiemi di registrazioni.
 
 ## 1. Versioni e ambiente
 
