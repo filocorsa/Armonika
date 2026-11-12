@@ -46,7 +46,8 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - **Download diretto da YouTube.** Armonika non include yt-dlp e non scarica nulla da solo: parla con MeTube solo se l'utente ce l'ha. Questo protegge il progetto (nel 2020 youtube-dl è stato rimosso da GitHub dopo una segnalazione DMCA).
 - **Multi-room / riproduzione sincronizzata** su più stanze.
 - **DLNA, jukebox mode, video, podcast, audiolibri.**
-- **Più librerie e permessi per cartella**: il database li prevede, ma non vengono costruiti ora.
+- **Ascolto di gruppo** (sessione con musica e coda condivise tra più persone): non ora, ma il design non deve impedirlo (§8.5).
+- **Link pubblici di condivisione** per persone senza account: non ora.
 - **Player web nella prima fase**: arriva dopo l'interfaccia di gestione (vedi §9).
 
 ## 5. Anti-obiettivi (cose che lo renderebbero un fallimento)
@@ -62,7 +63,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 ## 6. Decisioni prese con l'utente
 
 - **Licenza: AGPL-3.0, senza CLA.**
-- **Multi-utente fin dall'inizio.** Una libreria condivisa; preferiti, valutazioni, playlist, cronologia e scrobbling per utente. Ruoli: **admin** (sistema tag, scrive su file, gestisce MeTube e impostazioni) e **utente**.
+- **Multi-utente fin dall'inizio, con librerie e permessi.** Possono esistere più librerie; per ognuna l'admin decide chi accede e con quale permesso (ascolto o gestione). Una libreria condivisa e una personale sono lo stesso meccanismo. Chi ha il permesso di gestione su una libreria può aggiungere e sistemare musica in quella libreria. Playlist private di default, pubblicabili in sola lettura. Ascolti contemporanei senza limiti, ognuno per conto suo. Dettagli completi in §8.5.
 - **Due API**: OpenSubsonic (compatibilità) e un'API nativa di Armonika (tutto ciò che Subsonic non sa esprimere, e base dell'interfaccia web).
 - **Interfaccia web di gestione presto** (fase 2), player web dopo.
 - **Modalità headless**: l'interfaccia web si può disattivare dalla configurazione; restano le API.
@@ -79,7 +80,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - Conseguenze sul codice: niente percorsi scritti a mano con `/` o `\` (si usano le API di Rust per i percorsi), attenzione a maiuscole/minuscole nei nomi dei file (Windows e macOS non le distinguono, Linux sì) e ai caratteri non ammessi nei nomi dei file su Windows quando Armonika rinomina i brani. ffmpeg è incluso nell'immagine Docker; per i binari è una dipendenza opzionale, serve solo per la transcodifica.
 - La CI compila e fa girare i test su Linux, Windows e macOS a ogni modifica, non solo al momento del rilascio.
 - Configurazione: file TOML + variabili d'ambiente (`ARMONIKA_*`), con default sensati; la maggior parte delle impostazioni modificabile anche dall'interfaccia.
-- Cartelle: `music` (libreria), `inbox` (file da sistemare), `data` (database, cache copertine, indice di ricerca).
+- Cartelle: una o più cartelle di musica (una per libreria, §8.5), una cartella `inbox` per ogni libreria (file da sistemare), `data` (database, cache copertine, indice di ricerca). Nel caso più semplice c'è una sola libreria con le cartelle `music` e `inbox`.
 
 ### 7.2 Stack backend
 - Runtime async **Tokio**, server HTTP **axum**.
@@ -138,19 +139,68 @@ Il database si può sempre ricostruire dai file musicali. I dati che non stanno 
 ### 8.2 La coda "da sistemare"
 - In coda finiscono: i file nella cartella `inbox`, i download completati da MeTube e, su richiesta, i file della libreria con problemi (tag mancanti, copertina assente, album spezzati o duplicati).
 - Per ogni elemento Armonika propone una corrispondenza (MusicBrainz/AcoustID) con un **grado di confidenza**, i tag proposti e la copertina, mostrando le differenze rispetto a quelli attuali.
-- L'admin conferma, corregge o scarta. Alla conferma: si salva lo stato precedente nel registro, si scrivono i tag, si sposta e rinomina il file secondo uno schema configurabile (default: `Artista Album/Album (Anno)/NN - Titolo.ext`) e si aggiorna l'indice.
+- Ogni libreria ha la sua coda. La vede e la gestisce solo chi ha il permesso di gestione su quella libreria.
+- Chi ha il permesso di gestione conferma, corregge o scarta. Alla conferma: si salva lo stato precedente nel registro, si scrivono i tag, si sposta e rinomina il file secondo uno schema configurabile (default: `Artista Album/Album (Anno)/NN - Titolo.ext`) e si aggiorna l'indice.
 - **Annulla**: ogni operazione nel registro si può annullare (tag e percorso originali).
 - Applicazione automatica sopra una certa confidenza: **non nella prima versione**; il design la deve rendere possibile in seguito.
 
 ### 8.3 Scrittura sulla libreria esistente
-Per default Armonika **non scrive** nella libreria esistente (può essere montata in sola lettura). Scrivere tag o spostare file nella libreria è un'opzione che l'admin attiva esplicitamente. I file importati dalla `inbox` vengono invece sempre spostati nella libreria, perché è lo scopo dell'importazione.
+Per default Armonika **non scrive** nei file già presenti in una libreria (la cartella può essere montata in sola lettura). Scrivere tag o spostare file già presenti è un'opzione che l'admin attiva esplicitamente, libreria per libreria. I file importati dalla `inbox` vengono invece sempre spostati nella libreria, perché è lo scopo dell'importazione.
 
 ### 8.4 MeTube
-- Impostazione: indirizzo dell'istanza MeTube (ed eventuali credenziali). Senza, la funzione non appare.
+- Impostazione (solo admin): indirizzo dell'istanza MeTube (ed eventuali credenziali). Senza, la funzione non appare.
+- "Aggiungi da link" è disponibile solo a chi ha il permesso di gestione su almeno una libreria. Si sceglie la libreria di destinazione tra quelle in cui si ha il permesso, e il file finisce nella coda di quella libreria.
 - Dall'interfaccia si usa il campo "Aggiungi da link". Armonika invia la richiesta a MeTube (formato audio) e mostra lo stato del download (in coda, in corso, completato, fallito). Al completamento recupera il file via HTTP da MeTube, e il file entra nella coda "da sistemare".
 - Opzionale: se la cartella dei download di MeTube è montata anche in Armonika, il file si legge da lì senza scaricarlo.
 - Formato richiesto a MeTube: audio nella migliore qualità disponibile, senza riconversioni inutili (di solito Opus o M4A), con la copertina incorporata se MeTube lo consente. Scelta modificabile nelle impostazioni. *(Scelta di Claude.)*
 - Il formato di MeTube non è uno standard stabile: il client va isolato e coperto da test contro una vera istanza MeTube (in Docker).
+
+### 8.5 Utenti, librerie e permessi
+
+Questa sezione definisce in modo preciso cosa significa "multi-utente". Le scelte marcate *(decisa con l'utente)* non si cambiano senza tornare da lui; le altre sono scelte di Claude.
+
+**Ruoli dell'account**
+- **Admin del server**: crea e gestisce utenti e librerie, assegna i permessi, gestisce le impostazioni del server e il collegamento a MeTube. Ha automaticamente il permesso di gestione su tutte le librerie. Possono esserci più admin; non si può eliminare o declassare l'ultimo admin.
+- **Utente**: accede solo alle librerie per cui ha un permesso. Non vede le impostazioni del server.
+
+**Librerie** *(decisa con l'utente)*
+- Una libreria è una cartella di musica sul server, con un nome. Possono essercene quante se ne vuole.
+- Le cartelle di due librerie **non possono sovrapporsi** (nessuna libreria dentro un'altra), così ogni file appartiene a una sola libreria.
+- Lo stesso album presente in due librerie è fatto di file diversi e viene trattato come due album diversi. Non si cerca di unirli.
+- "Libreria condivisa" e "libreria personale" non sono tipi diversi: sono librerie con più utenti o con un solo utente ammesso.
+
+**Permessi per libreria** *(decisa con l'utente)*
+- **Ascolto**: vedere, cercare e ascoltare la musica della libreria.
+- **Gestione**: ascolto, più aggiungere musica (inbox, MeTube), usare la coda "da sistemare", modificare i tag, rinominare e spostare file dentro la libreria (se la scrittura è attiva, §8.3), annullare le operazioni del registro.
+- Eliminare un file non lo cancella subito: lo sposta in un cestino della libreria, svuotabile solo dall'admin.
+- Spostare musica da una libreria a un'altra richiede il permesso di gestione su entrambe.
+- Senza permesso, una libreria è invisibile: non compare nella ricerca, nella navigazione, nelle API né nei conteggi.
+
+**Dati personali di ogni utente**
+- Preferiti, valutazioni, numero di ascolti, cronologia, playlist, coda di riproduzione salvata, collegamenti a Last.fm e ListenBrainz, preferenze (es. qualità della transcodifica), credenziali per le app Subsonic.
+- Sono sempre per utente: il "numero di ascolti" di un brano è il tuo, non quello di tutta la famiglia.
+
+**Playlist** *(decisa con l'utente)*
+- Private di default. Il proprietario può renderle **pubbliche**: gli altri utenti le vedono e le ascoltano, ma non le modificano.
+- Una playlist può contenere brani di più librerie. Chi la guarda vede solo i brani delle librerie a cui ha accesso; gli altri sono nascosti, non mostrati come errori.
+
+**Ascolto contemporaneo** *(decisa con l'utente)*
+- Nessun limite al numero di utenti e dispositivi che ascoltano insieme; ognuno ascolta la sua musica in modo indipendente.
+- Lo stesso utente può usare più dispositivi. La coda di riproduzione salvata permette di riprendere su un altro dispositivo (funzione Subsonic `savePlayQueue`/`getPlayQueue`); se due dispositivi la salvano, vale l'ultimo.
+- "Cosa stanno ascoltando gli altri" (funzione Subsonic `getNowPlaying`): per privacy ogni utente vede solo il proprio ascolto, a meno che non scelga di renderlo visibile agli altri.
+- L'ascolto di gruppo non si costruisce ora; il design non deve impedirlo in futuro (es. non legare la coda di riproduzione a un singolo dispositivo in modo rigido).
+
+**Cambi di permessi e cancellazioni**
+- Se un utente perde l'accesso a una libreria, i suoi preferiti, valutazioni e cronologia su quei brani restano salvati ma diventano invisibili; tornano se l'accesso viene ridato.
+- Se si elimina un utente, si cancellano i suoi dati personali e le sue playlist (anche quelle pubbliche). I file musicali non vengono mai toccati.
+- Se si elimina una libreria da Armonika, si rimuovono i dati dal database ma **non i file** sul disco.
+
+**Come si vede dalle app Subsonic**
+- Ogni libreria corrisponde a una "cartella musicale" Subsonic (`getMusicFolders`). Ogni utente vede solo le proprie, e le app che lo supportano permettono di filtrare per libreria.
+
+**Cosa c'è in ogni fase**
+- Fase 1: il modello completo (librerie, permessi, dati per utente) esiste già nel database e nelle API Subsonic. Librerie e permessi si gestiscono dal file di configurazione o con comandi dell'eseguibile.
+- Fase 2: gestione di utenti, librerie e permessi dall'interfaccia web.
 
 ## 9. Fasi
 
@@ -159,10 +209,10 @@ Ogni fase si chiude solo quando il suo **criterio di uscita** è vero.
 **Fase 0: Spike e impalcatura.** Gli spike del §11, la struttura della repository, CI (build, test, lint, benchmark), generatore di librerie finte.
 *Uscita:* motore di ricerca scelto con dati alla mano; recupero dei file da MeTube verificato; CI verde.
 
-**Fase 1: Fondamenta di ascolto.** Scansione (completa + incrementale + osservazione delle cartelle), database, ricerca, streaming con range HTTP, copertine, utenti e ruoli, API OpenSubsonic (navigazione, ricerca, streaming, preferiti, playlist, scrobbling Last.fm/ListenBrainz), modalità headless, Docker.
+**Fase 1: Fondamenta di ascolto.** Scansione (completa + incrementale + osservazione delle cartelle), database, ricerca, streaming con range HTTP, copertine, utenti, ruoli, librerie e permessi (§8.5), API OpenSubsonic (navigazione, ricerca, streaming, preferiti, playlist, scrobbling Last.fm/ListenBrainz), modalità headless, Docker.
 *Uscita:* l'utente usa Armonika ogni giorno sul suo homelab con almeno due app Subsonic (es. Symfonium e Feishin), e i benchmark rispettano le soglie del §3.
 
-**Fase 2: Il cuore di Armonika.** API nativa, interfaccia web di gestione (accesso, utenti, impostazioni, stato della scansione, coda "da sistemare", modifica dei tag, registro e annullamento), MusicBrainz + AcoustID, scrittura dei tag, rinomina e spostamento.
+**Fase 2: Il cuore di Armonika.** API nativa, interfaccia web di gestione (accesso, utenti, librerie e permessi, impostazioni, stato della scansione, coda "da sistemare", modifica dei tag, registro e annullamento), MusicBrainz + AcoustID, scrittura dei tag, rinomina e spostamento.
 *Uscita:* partendo dalla libreria "disordinata apposta" (§10), l'utente la mette in ordine interamente dal browser, e ogni operazione si può annullare.
 
 **Fase 3: MeTube.** Collegamento, "Aggiungi da link", stato dei download, recupero del file, ingresso nella coda.
@@ -192,7 +242,7 @@ Gli spike non diventano codice di produzione: ciò che si impara entra nel piano
 ## 12. Lasciato al builder
 
 - Scelte di libreria specifiche non fissate qui (es. sqlx o rusqlite, osservazione delle cartelle, generazione OpenAPI).
-- Schema esatto del database, purché rispetti §6 e §8 (dati per utente, identificativi stabili, registro annullamenti, pronto per più librerie).
+- Schema esatto del database, purché rispetti §6 e §8 (dati per utente, identificativi stabili, registro annullamenti, librerie e permessi come in §8.5).
 - Design visivo dell'interfaccia, nel rispetto del brand kit.
 - Dettaglio dell'autenticazione (§7.4), con il vincolo di compatibilità Subsonic.
 - Quali endpoint OpenSubsonic implementare per primi, in base a ciò che usano Symfonium e Feishin.
