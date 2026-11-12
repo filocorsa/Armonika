@@ -17,6 +17,11 @@ Il secondo elemento distintivo è l'**integrazione opzionale con MeTube**. Dall'
 
 Fonti: https://github.com/basings/selfhosted-music-overview (confronto tra server, versione letta il 2026-11-12).
 
+Come gli altri server gestiscono il caricamento della musica (ricerca del 2026-11-12):
+- **Nessun caricamento dall'app**: Navidrome (per scelta: la cartella della musica è in sola lettura, si consiglia un file manager esterno), Jellyfin (solo con plugin di terze parti), Plex (richiesto dagli utenti da anni), gonic, LMS, Polaris.
+- **Caricamento dall'interfaccia web**: Koel (solo admin), Ampache (dalla versione 7 libreria di destinazione per utente; chi carica può modificare i propri caricamenti), mStream (permesso per utente dalla v6), Funkwhale (tutti, con spazio massimo per utente, default 1 GB), Airsonic-Advanced (verso cartelle prestabilite; vulnerabilità pubblicata nel 2025, vedi §8.5).
+- Nessuno combina caricamento, riordino dei tag e coda di revisione: è lo spazio di Armonika.
+
 ## 2. Obiettivi
 
 1. **Ascolto veloce prima di tutto.** Scansione, ricerca istantanea e avvio rapido dello streaming sono le fondamenta: niente altro viene prima.
@@ -48,6 +53,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - **DLNA, jukebox mode, video, podcast, audiolibri.**
 - **Ascolto di gruppo** (sessione con musica e coda condivise tra più persone): non ora, ma il design non deve impedirlo (§8.5).
 - **Link pubblici di condivisione** per persone senza account: non ora.
+- **Armonika come servizio pubblico** *(decisa con l'utente)*: il target è il self-hosting per sé, la famiglia e gli amici. Non si costruiscono iscrizione libera, verifica email per sconosciuti, piani, pagamenti, gestione delle segnalazioni di copyright. Il design però non lo impedisce: i limiti di spazio (§8.5) sono generici, così chi vuole offrire un servizio può costruirci sopra i propri piani (la licenza AGPL lo consente, con l'obbligo di pubblicare le modifiche).
 - **Player web nella prima fase**: arriva dopo l'interfaccia di gestione (vedi §9).
 
 ## 5. Anti-obiettivi (cose che lo renderebbero un fallimento)
@@ -205,6 +211,19 @@ Riassunto: **aggiunge musica a una libreria solo chi ha il permesso di gestione 
 - Ogni elemento in coda ricorda **chi l'ha aggiunto e da dove** (browser, MeTube, inbox), ed è visibile a tutti quelli che hanno la gestione su quella libreria.
 - I file già presenti nella cartella della libreria al momento della scansione non passano dalla coda: vengono indicizzati così come sono (§8.3).
 
+**Sicurezza dei caricamenti** (requisito, con test dedicati)
+- Un file caricato o scaricato da MeTube non deve mai poter finire fuori dalla coda della sua libreria. I nomi dei file vengono ripuliti e i percorsi verificati dopo la normalizzazione.
+- Gli archivi zip vengono estratti con lo stesso controllo: le voci con percorsi come `../`, percorsi assoluti o collegamenti simbolici vengono scartate (attacco noto come "zip slip"). Si controlla anche la dimensione totale estratta, per evitare archivi che si espandono a dismisura.
+- Motivo: in Airsonic-Advanced è stata pubblicata nel 2025 una vulnerabilità in cui un utente autenticato, tramite il caricamento delle playlist, poteva scrivere file fuori dalla cartella prevista.
+
+**Limiti di spazio** *(decisa con l'utente)*
+- **Spazio massimo per libreria**: quanto può occupare in totale la cartella della libreria.
+- **Spazio massimo per utente**: la somma dei file che quell'utente ha aggiunto (tramite la coda), in tutte le librerie. Si basa sul "chi l'ha aggiunto" registrato per ogni elemento.
+- Entrambi impostabili dall'admin, **illimitati di default**.
+- Il controllo avviene prima di accettare un caricamento o un download MeTube (in base alla dimensione dichiarata) e di nuovo alla fine (in base alla dimensione reale). Se il limite verrebbe superato, l'operazione viene rifiutata con un messaggio chiaro che indica spazio usato e spazio disponibile. La musica già presente resta sempre ascoltabile.
+- Se l'admin abbassa un limite sotto lo spazio già usato, non si cancella nulla: si bloccano solo i nuovi caricamenti.
+- I file presenti nella libreria prima di Armonika, o copiati a mano nella cartella, contano per lo spazio della libreria ma non per quello di nessun utente.
+
 **Esempio concreto (famiglia)**
 - Libreria "Famiglia": l'admin ha la gestione, gli altri l'ascolto. Solo l'admin aggiunge musica; tutti ascoltano e, se hanno il download offline, salvano i brani sul telefono.
 - Libreria "Marco": Marco ha la gestione ed è l'unico ammesso. Solo lui la vede e ci aggiunge musica (dal browser o da MeTube). L'admin può comunque gestirla, perché è admin.
@@ -234,7 +253,7 @@ Riassunto: **aggiunge musica a una libreria solo chi ha il permesso di gestione 
 **Cosa c'è in ogni fase**
 - Fase 1: il modello completo (librerie, permessi, dati per utente) esiste già nel database e nelle API Subsonic. Librerie e permessi si gestiscono dal file di configurazione o con comandi dell'eseguibile.
 - Fase 1: il permesso "download offline" è già rispettato dall'API Subsonic.
-- Fase 2: gestione di utenti, librerie e permessi dall'interfaccia web; caricamento dal browser.
+- Fase 2: gestione di utenti, librerie e permessi dall'interfaccia web; caricamento dal browser; limiti di spazio.
 
 ## 9. Fasi
 
