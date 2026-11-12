@@ -40,3 +40,6 @@ Thumbs.db
 # Spike 3 build output and work files (covers, generated test files)
 /spikes/03-tags/target/
 /spikes/03-tags/work/
+
+# Spike 6 build output
+/spikes/06-decode-fingerprint/target/

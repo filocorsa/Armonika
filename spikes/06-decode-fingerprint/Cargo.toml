@@ -1,0 +1,23 @@
+[package]
+name = "spike-decode-fingerprint"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+# Standalone throwaway project: not part of the Armonika workspace.
+[workspace]
+
+[features]
+default = ["libopus"]
+libopus = ["dep:symphonia-adapter-libopus"]
+
+[dependencies]
+symphonia = { version = "0.6.1", features = ["all"] }
+symphonia-adapter-libopus = { version = "0.3.0", optional = true }
+opus-decoder = "0.1.1"
+opus-pure = "0.2.3"
+rusty-chromaprint = "0.3.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
