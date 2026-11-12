@@ -16,6 +16,8 @@
 - Codice, commenti, messaggi di commit e documentazione pubblica in inglese. I documenti in `docs/spikes/` e `docs/superpowers/` possono essere in italiano.
 - Niente segni tipici del testo generato da AI in nessun file o commit: niente lineette lunghe (U+2014, U+2013), frecce (U+2192), carattere dei puntini di sospensione (U+2026), virgolette tipografiche (U+201C, U+201D, U+2018, U+2019). Dal Task 2 in poi, prima di ogni commit `python scripts/check_text_style.py` deve uscire con codice 0; prima del Task 2 si controlla a mano.
 - Nessuna menzione di Claude come autore o co-autore in commit, PR o file.
+- Flusso dei rami: tutto il lavoro della fase 0 si fa sul ramo `phase-0`, con push frequenti. A fine fase si apre una pull request verso `main` (CI completa sui tre sistemi) e si unisce solo con CI verde e approvazione dell'utente.
+- CI (decisa con l'utente): Linux a ogni push su qualsiasi ramo; Windows e macOS solo sulle pull request verso `main` e sui push su `main`, finché la repository è privata.
 - Nessun segreto committato (chiave AcoustID, password): si leggono da variabili d'ambiente (`ARMONIKA_ACOUSTID_KEY`) o da file in `.gitignore`.
 - Nessun file musicale committato, tranne i modelli di silenzio in `bench/templates/` (pochi KB, generati e documentati).
 - Multipiattaforma: tutto il codice di produzione compila e passa i test su Linux, Windows e macOS; percorsi solo tramite `std::path`, mai concatenando `/` o `\`.
@@ -100,15 +102,15 @@ fn version_flag_prints_name_and_version() {
 - Create: `scripts/check_text_style.py`
 
 **Interfaces:**
-- Produces: job `test` (matrice `ubuntu-latest`, `windows-latest`, `macos-latest`) con `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`; job `bench-build` (solo Linux) con `cargo bench --workspace --no-run`; job `text-style` (solo Linux) che esegue `scripts/check_text_style.py` su tutti i file tracciati. ffmpeg installato in ogni job (apt, choco, brew), perché i test di Task 4 e 5 lo usano.
+- Produces: job `test-linux` (`ubuntu-latest`, su ogni `push` e `pull_request`) e job `test-cross` (matrice `windows-latest`, `macos-latest`), eseguito solo in tre casi: `push` su `main`; `pull_request` verso `main` **non in bozza** (`github.event.pull_request.draft == false`); avvio manuale (`workflow_dispatch`). Entrambi con `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`; job `bench-build` (solo Linux) con `cargo bench --workspace --no-run`; job `text-style` (solo Linux) che esegue `scripts/check_text_style.py` su tutti i file tracciati. ffmpeg installato in ogni job (apt, choco, brew), perché i test di Task 4 e 5 lo usano.
 
 - [ ] **Step 1: Scrivere `scripts/check_text_style.py`**: riceve percorsi o, senza argomenti, usa `git ls-files`; salta i file binari; esce con codice 1 stampando `file:riga` per ogni carattere tra U+2014, U+2013, U+2192, U+2026, U+201C, U+201D, U+2018, U+2019.
 - [ ] **Step 2: Verificare lo script in locale.** Run: `python scripts/check_text_style.py`. Expected: codice 0 sulla repository attuale. Creare un file temporaneo con una lineetta lunga e verificare codice 1, poi cancellarlo.
-- [ ] **Step 3: Scrivere `ci.yml`** con trigger `push` e `pull_request`, cache di Cargo (`Swatinem/rust-cache`), i tre job descritti in Interfaces.
-- [ ] **Step 4: Commit e push, poi verificare.** Run: `gh run watch --exit-status`. Expected: tutti i job verdi sui tre sistemi.
+- [ ] **Step 3: Scrivere `ci.yml`** con trigger `push` (tutti i rami), `pull_request` verso `main` (tipi `opened`, `synchronize`, `reopened`, `ready_for_review`) e `workflow_dispatch`, `concurrency` che annulla le esecuzioni superate sullo stesso ramo, cache di Cargo (`Swatinem/rust-cache`), i tre job descritti in Interfaces.
+- [ ] **Step 4: Commit e push sul ramo `phase-0`, poi verificare.** Run: `gh run watch --exit-status`. Expected: job Linux verdi; `test-cross` non eseguito (corretto, non è `main`). Per verificare una volta anche Windows e macOS: `gh workflow run ci.yml --ref phase-0`, poi `gh run watch --exit-status`. Expected: `test-cross` verde su Windows e macOS.
 - [ ] **Step 5: Commit** eventuali correzioni `ci: fix <motivo>`.
 
-> Nota per l'utente (vedi domanda finale): la repository è privata, e GitHub conta i minuti di macOS 10 volte e quelli di Windows 2 volte rispetto a Linux sul piano gratuito.
+> Nota: durante la fase Windows e macOS non girano a ogni push. Si avviano a mano (`gh workflow run ci.yml --ref phase-0`) dopo i task che toccano file, percorsi o compilazione (Task 4, Task 5 e il passo multipiattaforma del Task 9), e automaticamente quando la pull request verso `main` passa da bozza a pronta.
 
 ### Task 3: Modelli audio di silenzio
 

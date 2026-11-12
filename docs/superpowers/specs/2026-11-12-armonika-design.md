@@ -119,7 +119,7 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
   - **Docker**: immagine multi-architettura pubblicata su GitHub Container Registry (linux/amd64 e linux/arm64, per PC, NAS e Raspberry Pi), con un docker-compose d'esempio pronto da copiare.
   - **Binari** su GitHub Releases per Linux (x86_64 e arm64), Windows (x86_64) e macOS (Intel e Apple Silicon).
 - Conseguenze sul codice: niente percorsi scritti a mano con `/` o `\` (si usano le API di Rust per i percorsi), attenzione a maiuscole/minuscole nei nomi dei file (Windows e macOS non le distinguono, Linux sì) e ai caratteri non ammessi nei nomi dei file su Windows quando Armonika rinomina i file. ffmpeg è incluso nell'immagine Docker; per i binari è una dipendenza opzionale, serve solo per la transcodifica.
-- La CI compila e fa girare i test su Linux, Windows e macOS a ogni modifica, non solo al momento del rilascio.
+- La CI compila e fa girare i test su Linux, Windows e macOS, non solo al momento del rilascio. *(Decisa con l'utente il 2026-11-12.)* Finché la repository è privata (credito CI limitato, macOS circa 10 volte più caro di Linux): Linux a ogni push su qualsiasi ramo; Windows e macOS sulle pull request verso `main` e sui push su `main`. Quando la repository diventa pubblica (CI gratuita), tutti e tre i sistemi a ogni push.
 - Configurazione: file TOML + variabili d'ambiente (`ARMONIKA_*`), con default sensati; la maggior parte delle impostazioni modificabile anche dall'interfaccia.
 - Cartelle (regole precise in §8.7 punto 2):
   - una cartella per ogni libreria (§8.5); dentro ognuna, Armonika usa solo la cartella nascosta `.armonika/` (cestino della libreria), che la scansione ignora;
