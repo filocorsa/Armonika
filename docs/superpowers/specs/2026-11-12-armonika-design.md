@@ -73,7 +73,11 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 
 ### 7.1 Forma del prodotto
 - **Un unico eseguibile** Rust che contiene server, entrambe le API e l'interfaccia web (i file statici sono incorporati nel binario).
-- Distribuzione: immagine Docker multi-architettura (amd64 e arm64, per Raspberry Pi e simili) + binari scaricabili da GitHub Releases.
+- **Multipiattaforma** (requisito dell'utente). Due modi di installazione, entrambi supportati allo stesso livello:
+  - **Docker**: immagine multi-architettura pubblicata su GitHub Container Registry (linux/amd64 e linux/arm64, per PC, NAS e Raspberry Pi), con un docker-compose d'esempio pronto da copiare.
+  - **Binari** su GitHub Releases per Linux (x86_64 e arm64), Windows (x86_64) e macOS (Intel e Apple Silicon).
+- Conseguenze sul codice: niente percorsi scritti a mano con `/` o `\` (si usano le API di Rust per i percorsi), attenzione a maiuscole/minuscole nei nomi dei file (Windows e macOS non le distinguono, Linux sì) e ai caratteri non ammessi nei nomi dei file su Windows quando Armonika rinomina i brani. ffmpeg è incluso nell'immagine Docker; per i binari è una dipendenza opzionale, serve solo per la transcodifica.
+- La CI compila e fa girare i test su Linux, Windows e macOS a ogni modifica, non solo al momento del rilascio.
 - Configurazione: file TOML + variabili d'ambiente (`ARMONIKA_*`), con default sensati; la maggior parte delle impostazioni modificabile anche dall'interfaccia.
 - Cartelle: `music` (libreria), `inbox` (file da sistemare), `data` (database, cache copertine, indice di ricerca).
 
