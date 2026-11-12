@@ -114,6 +114,7 @@ armonika/
     armonika-metube/    client MeTube
     armonika-server/    eseguibile: config, avvio, wiring, incorpora la UI
   web/                  interfaccia web
+  site/                 sito e documentazione pubblica (Astro + Starlight, più avanti)
   bench/                generatore di librerie finte e benchmark
   docs/
 ```
@@ -125,6 +126,7 @@ Regola: le crate API dipendono dal core, mai il contrario; l'integrazione MeTube
 - Client dell'API generato dalla specifica OpenAPI.
 - Brand: colori e logo da `images/armonika-brand-kit/BRAND.md` (sfondo scuro `#0F1115`, unico accento ruggine `#C2452D`, testo crema `#F4F1EC`). Tema scuro per primo.
 - Lingue: inglese e italiano, con struttura pronta per altre traduzioni.
+- Sito del progetto e documentazione pubblica (non l'interfaccia dell'app): **Astro + Starlight**, nella cartella `site/` della stessa repository. Priorità bassa, da costruire vicino al rilascio pubblico. *(Scelta di Claude, l'utente non la considera fondamentale.)*
 
 ### 7.7 Lingua del progetto
 Codice, commenti, README, documentazione pubblica e messaggi di commit in **inglese**, perché il progetto è open e internazionale. I documenti interni di pianificazione possono restare in italiano.
