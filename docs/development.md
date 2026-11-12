@@ -35,6 +35,8 @@ The same seed always gives a byte-identical `manifest.json`. Paths in the manife
 relative to the output folder and always use forward slashes, so manifests compare equal
 across platforms.
 
+The generator caps relative paths at 200 characters, so on Windows keep the output root under about 55 characters: the documented `bench/data/big-100k` inside a deep checkout may exceed the 260-character path limit for tools like ffmpeg, fpcalc or Python.
+
 Measured on the development machine (Windows 11, release build, 7 formats in rotation):
 
 - 100,000 files generated in 534 s (about 9 minutes), mostly file system overhead.

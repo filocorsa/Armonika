@@ -99,3 +99,18 @@ the edition's release. All checks were done on 2026-11-12.
   other recordings of the same songs). The manifest recording is always among them.
 - Compilation copies keep the source's recording and release ids in `ground_truth.json`:
   the recording is the same, the album on the file is the fake "Greatest Hits".
+
+
+## Known limitations
+
+- Mutating damages are written with lofty's generic tag API, which drops some fields on
+  mutated copies. Verified: on `nin-ghosts-10.flac` the damaged copy loses DISCC, MCN and
+  TOTALTRACKS and writes TRACKTOTAL as "36;36". This undeclared extra damage is not in the
+  ground truth. To fix before phase 2 acceptance by switching to the native split/merge API.
+- The output is flat and file names reveal the source id and the role (`-copy`, `-opus`,
+  `-compilation`), so grouping by source folder (design 8.7 point 15) is not exercised and
+  name-based heuristics see the answer. To change before phase 2 acceptance: neutral file
+  names, per-edition folders, and the mapping kept in `ground_truth.json`.
+- Several sources are archive.org derivatives (`_320kb.mp3`, `.ogg`) that archive.org may
+  regenerate, which would fail the sha256 check. Keep a private backup of
+  `bench/data/cc-sources`.
