@@ -1,7 +1,7 @@
 # Armonika: documento di design
 
 Data: 2026-11-12
-Stato: bozza da approvare
+Stato: approvato dall'utente il 2026-11-12
 
 ## Glossario
 
