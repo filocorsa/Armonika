@@ -1,4 +1,4 @@
-# Armonika – brand
+# Armonika - brand
 
 ## Colori
 
