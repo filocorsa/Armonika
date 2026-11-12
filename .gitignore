@@ -43,3 +43,6 @@ Thumbs.db
 
 # Spike 6 build output
 /spikes/06-decode-fingerprint/target/
+
+# Spike 4 build output
+/spikes/04-recognition/target/
