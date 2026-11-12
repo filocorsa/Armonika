@@ -87,7 +87,6 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - **Armonika come servizio pubblico** *(decisa con l'utente)*: il target è il self-hosting per sé, la famiglia e gli amici. Non si costruiscono iscrizione libera, verifica email per sconosciuti, piani, pagamenti, gestione delle segnalazioni di copyright. Il design però non lo impedisce: i limiti di spazio (§8.5) sono generici, così chi vuole offrire un servizio può costruirci sopra i propri piani (la licenza AGPL lo consente, con l'obbligo di pubblicare le modifiche).
 - **Funzioni basate sulla canzone** (es. "mostra tutte le registrazioni di questa canzone"): non ora; il dato si conserva quando MusicBrainz lo fornisce.
 - **Player web nella prima fase**: arriva dopo l'interfaccia di gestione (vedi §9).
-- **Idea per dopo: contribuire ad AcoustID.** Come fa MusicBrainz Picard, Armonika potrebbe inviare ad AcoustID le impronte dei file confermati dall'utente, migliorando il database da cui dipendiamo. Solo su scelta esplicita dell'utente (disattivato di default), non nella prima versione.
 
 ## 5. Anti-obiettivi (cose che lo renderebbero un fallimento)
 
@@ -133,7 +132,14 @@ Le soglie si verificano con una suite di benchmark ripetibile (vedi §10).
 - **Calcolo dell'impronta audio**: l'algoritmo è **Chromaprint**, creato per AcoustID dallo stesso autore. L'impronta va calcolata in locale, e deve essere identica a quella prodotta dallo strumento ufficiale `fpcalc`, altrimenti AcoustID non la riconosce. Due strade, da scegliere con lo spike 6 (§11):
   - **rusty-chromaprint**: porting in Rust puro, licenza MIT, versione 0.3 dichiarata "in progress" dall'autore. Non richiede librerie esterne;
   - **libreria C originale** (`chromaprint`): codice MIT, ma nel complesso da considerare LGPL 2.1 perché include parti di FFmpeg; compatibile con AGPL, ma complica la compilazione multipiattaforma.
-  - In entrambi i casi serve prima **decodificare l'audio** di ogni formato accettato. Da verificare: la libreria Rust di decodifica più usata (Symphonia) potrebbe non supportare Opus, che è proprio il formato tipico dei download da MeTube; in quel caso serve un'alternativa (es. ffmpeg o una libreria Opus dedicata).
+  - In entrambi i casi serve prima **decodificare l'audio** di ogni formato accettato. La decodifica serve solo per l'impronta audio e per la transcodifica: lo streaming del file originale e la lettura/scrittura dei tag non ne hanno bisogno.
+- **Decodifica audio** (verificato il 2026-11-12 sul README di Symphonia e sui crate pubblicati):
+  - **Symphonia** (Rust puro, licenza MPL-2.0, la libreria di decodifica Rust più usata) decodifica FLAC, MP3, Vorbis, AAC-LC, ALAC, WAV/AIFF. **Non decodifica Opus** (segnato come non implementato; la richiesta è aperta dal 2020, issue #8) e nemmeno HE-AAC.
+  - Opus è il formato tipico dei download da MeTube, quindi va coperto. Opzioni, da confrontare nello spike 6:
+    - **libopus** (la libreria di riferimento, in C, licenza BSD) collegata a Symphonia tramite il crate `symphonia-adapter-libopus`: decoder maturo, ma aggiunge una dipendenza C da compilare per ogni piattaforma;
+    - **decoder Opus in Rust puro** (es. `opus-decoder`, `opus-pure`): nessuna dipendenza C, ma progetti giovani (versioni 0.1 e 0.2 nel 2026) da validare;
+    - **ffmpeg** come processo esterno: già previsto per la transcodifica, ma per i binari è una dipendenza opzionale.
+  - HE-AAC: i file M4A di qualità migliore offerti da YouTube sono di solito AAC-LC, che Symphonia decodifica; per HE-AAC vale lo stesso discorso di Opus. Da misurare nello spike 6 quanti file reali ne sono interessati.
 - Per ogni traccia si conservano, quando noti, gli identificativi MusicBrainz di registrazione, edizione, album, canzone e artisti.
 - **Condizioni d'uso dei servizi esterni** (verificate il 2026-11-12):
   - **MusicBrainz**: i dati principali (artisti, registrazioni, edizioni, album) sono CC0, cioè di pubblico dominio; il resto è CC BY-NC-SA 3.0. L'API è gratuita per uso non commerciale, con un limite di circa 1 richiesta al secondo per indirizzo IP e l'obbligo di uno User-Agent che identifichi l'applicazione e un contatto. Chi la usa commercialmente deve accordarsi con la MetaBrainz Foundation.
@@ -414,7 +420,7 @@ L'utente non ha ancora una libreria musicale, quindi:
 3. **Scrittura tag**: lofty su tutti i formati elencati, controllando che i file restino leggibili dalle app comuni e che non si perdano dati (copertine incorporate, tag sconosciuti).
 4. **Riconoscimento**: per quanti file "stile YouTube" AcoustID + MusicBrainz trovano la registrazione giusta, quanto spesso viene scelta l'edizione giusta, e con quali pesi e soglie il punteggio di confidenza di Armonika (§8.2) separa bene le corrispondenze giuste da quelle sbagliate. Uscita: pesi e soglie scritti nel piano, con i numeri misurati.
 5. **Impronta del contenuto**: verificare che l'impronta usata per riconoscere un file spostato da fuori (§8.1) resti uguale quando cambiano solo i tag, su tutti i formati elencati, e quanto costa calcolarla durante la scansione.
-6. **Impronta audio per AcoustID**: rusty-chromaprint contro la libreria C originale. Uscita: la soluzione scelta produce impronte identiche a `fpcalc` su tutti i formati accettati (incluso Opus), con tempi di calcolo misurati.
+6. **Decodifica e impronta audio per AcoustID**: rusty-chromaprint contro la libreria C originale, e per Opus (e HE-AAC) libopus tramite adapter contro un decoder in Rust puro contro ffmpeg. Uscita: la combinazione scelta decodifica tutti i formati accettati e produce impronte che AcoustID riconosce come quelle di `fpcalc`, con tempi di calcolo e impatto sulla compilazione multipiattaforma misurati.
 
 Gli spike non diventano codice di produzione: ciò che si impara entra nel piano.
 
