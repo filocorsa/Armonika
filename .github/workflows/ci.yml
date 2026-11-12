@@ -15,7 +15,49 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decides whether the Rust jobs are needed. Changes limited to documentation
+  # and images (*.md, docs/, images/) cannot affect the build or the tests, so
+  # those jobs are skipped (reported as "skipped", which counts as passing).
+  # Any other file, or an unknown base (new branch, manual run), runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        name: Detect code changes
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) base="" ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "No usable base commit: running all jobs"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo "changed: $f"
+            case "$f" in
+              *.md|docs/*|images/*) ;;
+              *) code=true ;;
+            esac
+          done < <(git diff --name-only "$base" HEAD)
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test-linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,10 +73,12 @@ jobs:
       - run: cargo test --workspace
 
   test-cross:
+    needs: changes
     if: >-
+      needs.changes.outputs.code == 'true' && (
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +102,8 @@ jobs:
       - run: cargo test --workspace
 
   bench-build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
