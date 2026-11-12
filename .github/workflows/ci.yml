@@ -31,11 +31,14 @@ jobs:
         name: Detect code changes
         env:
           EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           case "$EVENT" in
-            pull_request) base="$PR_BASE" ;;
+            # A pull request is checked out as a test merge into the current
+            # base branch: its first parent is that branch as it is now.
+            # (pull_request.base.sha can be stale and would add files merged
+            # into main after the pull request was opened.)
+            pull_request) base="$(git rev-parse HEAD^1)" ;;
             push) base="$PUSH_BEFORE" ;;
             *) base="" ;;
           esac
