@@ -1,5 +1,5 @@
 # Rust
-/target/
+target/
 **/*.rs.bk
 
 # Web UI
@@ -29,3 +29,6 @@ Thumbs.db
 
 # Old brand drafts, not part of the project
 /images/old/
+
+# Generated benchmark data
+/bench/data/

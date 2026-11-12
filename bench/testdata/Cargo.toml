@@ -1,0 +1,22 @@
+[package]
+name = "armonika-testdata"
+description = "Deterministic fake music library generator for benchmarks and tests"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+lofty = "0.25.5"
+rand = "0.10.3"
+rand_chacha = "0.10.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+tempfile = "3.27.0"
