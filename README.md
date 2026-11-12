@@ -1,8 +1,7 @@
 <p align="center">
-  <img alt="Armonika" src="images/armonika-brand-kit/armonika-logo-banner.svg" width="480">
+  <img alt="Armonika" src="images/armonika-brand-kit/armonika-logo-banner.svg" width="480"><br>
+  <strong>The lightweight self-hosted music server that puts your library in order.</strong>
 </p>
-
-<p align="center"><strong>The lightweight self-hosted music server that puts your library in order.</strong></p>
 
 ## Status
 
