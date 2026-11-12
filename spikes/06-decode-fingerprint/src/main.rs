@@ -4,7 +4,7 @@
 //! decoder variant, fingerprint the first 120 seconds with rusty-chromaprint
 //! (fpcalc-equivalent preset) and compare with `fpcalc -raw`.
 //!
-//! Usage: spike-decode-fingerprint <out.json> <dir> [<dir> ...]
+//! Usage: spike-decode-fingerprint <out.json> <dir or file> [<dir or file> ...]
 
 use std::fs::File;
 use std::io::BufReader;
@@ -73,9 +73,17 @@ fn main() {
         eprintln!("usage: {} <out.json> <dir> [<dir> ...]", args[0]);
         std::process::exit(2);
     }
+    if args[1] == "count-packets" {
+        count_packets(Path::new(&args[2]));
+        return;
+    }
     let out = PathBuf::from(&args[1]);
     let mut files: Vec<PathBuf> = Vec::new();
     for dir in &args[2..] {
+        if Path::new(dir).is_file() {
+            files.push(PathBuf::from(dir));
+            continue;
+        }
         for entry in std::fs::read_dir(dir).expect("read dir") {
             let path = entry.expect("dir entry").path();
             if is_audio(&path) {
@@ -97,6 +105,11 @@ fn main() {
         if ext == "opus" {
             variants.extend(["symphonia+libopus", "opus-decoder", "opus-pure"]);
         }
+        if ext == "m4a" {
+            // Experiment: Symphonia ignores the MP4 edit list (elst media time 1024,
+            // the AAC encoder priming written by ffmpeg); drop those frames by hand.
+            variants.push("symphonia+skip1024");
+        }
         variants.push("ffmpeg");
 
         let mut vresults = Vec::new();
@@ -105,6 +118,11 @@ fn main() {
             let decoded = match variant {
                 "symphonia" => decode_symphonia(path, false),
                 "symphonia+libopus" => decode_symphonia(path, true),
+                "symphonia+skip1024" => decode_symphonia(path, false).map(|mut p| {
+                    let n = (1024 * p.channels as usize).min(p.samples.len());
+                    p.samples.drain(..n);
+                    p
+                }),
                 "opus-decoder" => decode_opus_decoder(path),
                 "opus-pure" => decode_opus_pure(path),
                 "ffmpeg" => decode_ffmpeg(path),
@@ -130,6 +148,12 @@ fn main() {
                     compressed: String::new(),
                 },
                 Ok(pcm) => {
+                    if let Ok(dir) = std::env::var("SPIKE_DUMP_DIR") {
+                        // Diagnostic only: raw interleaved s16le of the decoded audio.
+                        let bytes: Vec<u8> = pcm.samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+                        let dump = Path::new(&dir).join(format!("{name}.{variant}.s16"));
+                        std::fs::write(dump, bytes).expect("write dump");
+                    }
                     let start = Instant::now();
                     let fp = fingerprint(&config, &pcm);
                     let fingerprint_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -423,4 +447,30 @@ fn decode_ffmpeg(path: &Path) -> Result<Pcm, String> {
         channels,
         decode_errors: 0,
     })
+}
+
+/// Diagnostic: packets and their total size as seen by Symphonia's Ogg reader
+/// and by opus-pure's Ogg reader.
+fn count_packets(path: &Path) {
+    let file = File::open(path).expect("open");
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut format = symphonia::default::get_probe()
+        .probe(&Hint::new(), mss, FormatOptions::default(), MetadataOptions::default())
+        .expect("probe");
+    let (mut n, mut bytes, mut dur) = (0u64, 0usize, 0u64);
+    while let Ok(Some(p)) = format.next_packet() {
+        n += 1;
+        bytes += p.data.len();
+        dur += p.dur.get();
+    }
+    println!("symphonia ogg: packets={n} bytes={bytes} dur={dur}");
+    let file = File::open(path).expect("open");
+    let mut reader = opus_pure::OggOpusReader::new(BufReader::new(file)).expect("ogg");
+    let (mut n, mut bytes) = (0u64, 0usize);
+    for p in reader.packets() {
+        let p = p.expect("packet");
+        n += 1;
+        bytes += p.data.len();
+    }
+    println!("opus-pure ogg: packets={n} bytes={bytes}");
 }
