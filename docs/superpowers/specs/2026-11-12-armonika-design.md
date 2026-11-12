@@ -230,7 +230,7 @@ Stile dei testi: niente segni tipici del testo generato da AI (lineette lunghe, 
 - Applicazione automatica sopra una certa confidenza: **non nella prima versione**; il design la deve rendere possibile in seguito.
 
 ### 8.3 Scrittura sui file già presenti in una libreria
-- Per default Armonika **non scrive** nei file delle tracce già presenti in una libreria (la cartella può essere montata in sola lettura). Scrivere tag o spostare quei file è un'opzione che l'admin attiva esplicitamente, libreria per libreria (livelli esatti in §8.7 punto 4). Finché la scrittura non è attiva, le tracce di quella libreria non si possono correggere né rivedere (Glossario: i dati musicali di una traccia sono i tag del suo file).
+- Per default Armonika **non scrive** nei file delle tracce già presenti in una libreria (livello "Sola lettura"; la cartella può essere montata in sola lettura). Gli altri livelli sono "Solo tag" e "Tag e organizzazione" (§8.7 punto 4). Scrivere tag o spostare quei file è un'opzione che l'admin attiva esplicitamente, libreria per libreria (livelli esatti in §8.7 punto 4). Finché la scrittura non è attiva, le tracce di quella libreria non si possono correggere né rivedere (Glossario: i dati musicali di una traccia sono i tag del suo file).
 - I file che arrivano dalla coda (browser, MeTube, `inbox`) vengono invece sempre scritti e spostati nella libreria alla conferma, perché è lo scopo dell'importazione. Questo richiede che la cartella della libreria sia scrivibile; se non lo è, Armonika lo segnala e la coda di quella libreria non accetta conferme.
 
 ### 8.4 MeTube
@@ -272,6 +272,7 @@ Questa sezione definisce in modo preciso cosa significa "multi-utente". Le scelt
 
 **Cestino ed eliminazione** *(scelta di Claude)*
 - Il cestino di una libreria sta nella cartella nascosta `.armonika/cestino/` dentro la cartella della libreria (stesso disco, quindi spostamenti istantanei); quello degli elementi in coda scartati sta in `data`. Eliminare tracce o sostituire file richiede che Armonika possa modificare i file esistenti (§8.7 punto 4).
+- Il cestino esiste solo nelle librerie al livello "Tag e organizzazione" (§8.7 punto 4).
 - Eliminare una traccia sposta il suo file nel cestino della libreria. La traccia risulta "eliminata": sparisce dalle app e dalle playlist, ma i dati personali collegati restano finché il cestino non viene svuotato.
 - Ripristinare dal cestino riporta il file al suo posto e la traccia ricompare, anche nelle playlist, con tutti i dati personali.
 - Svuotare il cestino (chi può farlo: vedi §8.7 punto 12) cancella definitivamente i file e le tracce eliminate, con i dati personali collegati; le tracce spariscono definitivamente dalle playlist.
@@ -362,7 +363,7 @@ Questa sezione descrive passo per passo cosa succede a un file dall'arrivo fino 
   - **Non sono doppioni**: la stessa registrazione in un'altra edizione (es. una raccolta "Greatest Hits" che contiene la registrazione dell'album originale); registrazioni diverse della stessa canzone (studio, live, remix, cover); qualsiasi traccia in un'altra libreria. In questi casi **non si segnala nulla**.
   - Se registrazione o edizione non sono state riconosciute, l'elemento si considera doppione solo se l'impronta audio è quasi identica a quella di una traccia della stessa libreria **e** nei tag coincidono titolo dell'album e numero di traccia. Altrimenti non si segnala nulla. *(Scelta di Claude.)*
   - Per un doppione l'avviso si mostra sempre, chiunque abbia aggiunto la traccia già presente, con chi l'ha aggiunta, quando e il confronto di qualità dei due file (formato, bitrate, durata). Chi gestisce sceglie, senza opzione predefinita:
-    - **sostituisci**: il file nuovo diventa il file della traccia esistente; il vecchio file va nel cestino. La traccia resta la stessa, quindi preferiti, valutazioni, conteggi e playlist non cambiano;
+    - **sostituisci** (disponibile solo nelle librerie al livello "Tag e organizzazione", §8.7 punto 4, perché tocca un file esistente): il file nuovo diventa il file della traccia esistente; il vecchio file va nel cestino. La traccia resta la stessa, quindi preferiti, valutazioni, conteggi e playlist non cambiano;
     - **tieni entrambi**: l'elemento diventa una nuova traccia, distinta da quella esistente;
     - **scarta**: il file dell'elemento va nel cestino.
 
@@ -412,7 +413,18 @@ Questa sezione nasce dalla revisione del documento fatta da un lettore esterno i
 - Annullare una **sostituzione**: il vecchio file torna a essere il file della traccia e quello nuovo va nella coda; possibile solo finché il vecchio file è nel cestino.
 - Il registro si conserva per sempre; l'annullamento è possibile finché le condizioni sopra sono vere. Lo stato precedente salva tutti i tag testuali; le copertine incorporate si salvano una sola volta per contenuto (stessa immagine, una sola copia), per contenere lo spazio.
 
-**4. Cosa può fare Armonika sui file esistenti di una libreria** *(da decidere con l'utente, vedi domanda aperta A)*
+**4. Cosa può fare Armonika sui file esistenti di una libreria** *(decisa con l'utente)*
+
+Per ogni libreria l'admin sceglie uno di tre livelli. Vale per i file delle tracce già presenti; i file importati dalla coda vengono sempre scritti e sistemati secondo lo schema dei nomi (§8.3).
+
+| Livello | Tag dei file esistenti | Rinomina e spostamento secondo lo schema | Cestino, eliminazione, sostituzione, unione di doppioni | Revisione di tracce |
+|---|---|---|---|---|
+| **Sola lettura** (default) | no | no | no | no |
+| **Solo tag** | sì | no: i file restano nelle cartelle e con i nomi scelti dall'utente | no | sì, ma alla conferma si scrivono solo i tag |
+| **Tag e organizzazione** | sì | sì | sì | sì, completa |
+
+- Con "Solo tag" e "Sola lettura" la cartella nascosta `.armonika/` non serve e non viene creata.
+- Passare a un livello più alto non modifica nulla da solo: i file cambiano solo con revisioni confermate. In particolare, attivare "Tag e organizzazione" **non** riorganizza automaticamente tutta la libreria; per farlo serve un'azione esplicita "riorganizza secondo lo schema", con anteprima di tutti gli spostamenti e conferma. *(Scelta di Claude.)*
 
 **5. Doppioni: come si rileva l'audio quasi identico**
 - Per gli elementi in coda si usa l'impronta Chromaprint (quella di AcoustID), già calcolata per il riconoscimento.
@@ -444,7 +456,10 @@ Questa sezione nasce dalla revisione del documento fatta da un lettore esterno i
 - `inbox` è una cartella di consegna: mettere un file lì significa consegnarlo ad Armonika. Armonika lo **sposta** nella cartella di sosta (non lo copia, per non ritrovarlo due volte). È l'unica cartella in cui Armonika sposta file senza una conferma per ogni file, ed è scritto chiaramente nella documentazione e accanto all'impostazione.
 - Armonika aspetta che il file sia completo (dimensione stabile per alcuni secondi) prima di prenderlo.
 
-**12. Chi svuota il cestino** *(da decidere con l'utente, vedi domanda aperta B)*
+**12. Chi svuota il cestino** *(decisa con l'utente)*
+- Chi ha la gestione su una libreria può svuotarne il cestino (tutto o singoli file); l'admin può farlo su tutte le librerie.
+- L'admin può impostare per ogni libreria uno svuotamento automatico dopo N giorni; **spento di default**.
+- Svuotare chiede sempre conferma e mostra quante tracce eliminate e quanti dati personali collegati verranno cancellati definitivamente.
 
 **13. Eliminazione di una libreria**: vedi §8.5, "Cambi di permessi e cancellazioni".
 
