@@ -68,7 +68,7 @@ Misura (`cost`): per ogni file si apre, si fa il probe e si calcola A e B, conta
 | opus | 6 | 2,40 | 6,04 | 7,69 | 2,48 | 0,531 | 5,30 | 0,66 |
 | **tutti** | 54 | 8,96 | 15,28 | 7,45 | 8,99 | 0,548 | 13,2 (media pesata delle mediane) | 0,73 (idem) |
 
-A legge l'intero file (MB letti = dimensione). B legge in media 0,55 MB (6% del file) e meno di 1,1 MB nel caso peggiore (flac): sono le letture a blocchi del probe (tag e intestazioni) più un blocco per ogni punto di campionamento, indipendenti dalla lunghezza del brano.
+A legge l'intero file (MB letti = dimensione). B legge in media 0,55 MB (6% del file) e meno di 1,1 MB nel caso peggiore (flac): sono le letture del probe (tag e intestazioni), più i blocchi dei campioni di inizio e di metà, più la lettura sequenziale dal 98% della durata fino alla fine del file. Quest'ultima parte **cresce con la lunghezza del brano** (circa il 2% del file, per esempio circa 115 KB su un mp3 da 5,7 MB), quindi B non è indipendente dalla lunghezza.
 
 ### Estrapolazione a 50.000 file da 8 MB su HDD
 
@@ -77,10 +77,12 @@ Formula: `tempo_per_file = MB_letti / 150 MB/s + N_posizionamenti x 10 ms`, `tot
 | Variante | MB letti per file | Posizionamenti per file (ipotesi) | Tempo per file | 50.000 file | Contro la soglia di 5 minuti |
 |---|---|---|---|---|---|
 | A (completa) | 8,0 | 1 | 53 + 10 = 63 ms | 3.167 s = **52,8 min** | 10,6 volte la soglia |
-| B (campionata) | 0,55 (misurato) | 3 (probe e inizio, metà, fine; ipotesi: 0,19 MB dell'mp3 sono circa 3 blocchi da 64 KiB) | 3,7 + 30 = 33,7 ms | 1.683 s = **28 min** | 5,6 volte la soglia |
-| Solo posizionamento di apertura (1 x 10 ms, lettura dei tag che la scansione fa comunque) | circa 0,06 (probe tag) | 1 | 10 ms | 500 s = 8,3 min | già oltre la soglia da sola |
+| B (campionata) | 0,55 (misurato) | 3 (probe e inizio, metà, fine; ipotesi non verificata: non si deduce dai 0,19 MB dell'mp3, che includono anche la lettura sequenziale della coda) | 3,7 + 30 = 33,7 ms | 1.683 s = **28 min** | 5,6 volte la soglia |
+| Solo posizionamento di apertura (1 x 10 ms, lettura dei tag che la scansione fa comunque) | circa 0,06 (probe tag) | 1 | 10 ms | 500 s = 8,3 min | già oltre la soglia da sola (vedi nota sotto) |
 
 I posizionamenti per file (1 per A, 3 per B) sono un'ipotesi, non una misura: dipendono dalla frammentazione del disco e dal modo in cui l'OS gestisce la lettura anticipata. Il numero di 10 ms e i 150 MB/s vengono dal brief. Su SSD, con cache calda, i totali misurati sarebbero circa 11 minuti (A, 13,2 ms x 50.000) e 37 secondi (B, 0,73 ms x 50.000), prima di qualsiasi parallelismo tra core, che non ho misurato.
+
+Implicazione per il design: se anche solo aprire 50.000 file su un HDD a freddo (un posizionamento ciascuno) supera i 5 minuti, la soglia della prima scansione non è raggiungibile con letture sequenziali di un file alla volta; serve I/O parallelo (più file in volo, che l'HDD riordina) oppure rivedere la soglia. Non misurato qui.
 
 Conclusione dei numeri: **nessuna delle due varianti sta nei 5 minuti su HDD durante la prima scansione**, e B costa comunque almeno 3 posizionamenti per file, quasi 3 volte quelli che la scansione fa già per leggere i tag. A è il costo di rileggere l'intera libreria (circa 400 GB).
 
@@ -100,7 +102,10 @@ B dà quindi un falso "uguale" ogni volta che due file differiscono solo fuori d
 
 1. **Variante A (completa), BLAKE3 sui pacchetti compressi letti da Symphonia, senza decodifica. In background dopo la scansione**, come l'impronta Chromaprint (§8.7 punto 5), non durante la scansione. Motivo: A è l'unica abbastanza sicura per il ricollegamento automatico (nessun falso "uguale" per campionamento, stabile in 462 prove su tutti i formati (8 modifiche x 54 file, più 2 modifiche ID3v1 x 15 mp3)) ma richiede di leggere tutto il file: 52,8 minuti stimati su HDD per 50.000 file da 8 MB, contro i 5 minuti della prima scansione.
 2. **La variante B non va scelta come impronta** (non sta nel budget comunque: 28 minuti stimati su HDD per i soli posizionamenti, è instabile sugli mp3 quando cambia l'ID3v1, ed è soggetta a collisioni da campionamento). Non si usa neppure come impronta rapida in scansione.
-3. La scansione registra per ogni file solo ciò che costa già una lettura (percorso, dimensione, data di modifica, tag). L'impronta del contenuto viene calcolata dal processo in background insieme (o poco prima) di Chromaprint; il ricollegamento per spostamento (§8.7 punto 1) usa l'impronta A e funziona per i file la cui impronta è già stata calcolata. Un file spostato prima che la sua impronta sia calcolata si tratta come file nuovo e traccia mancante: è il costo accettato.
+3. La scansione registra per ogni file solo ciò che costa già una lettura (percorso, dimensione, data di modifica, tag). L'impronta del contenuto viene calcolata dal processo in background insieme (o poco prima) di Chromaprint. Conseguenze, nell'ordine in cui le vede l'utente:
+   - **Nel frattempo**: un file spostato a mano sparisce dal vecchio percorso e compare in uno nuovo. La traccia vecchia risulta mancante e, come dice §8.1, **conserva tutti i dati personali** (preferiti, valutazioni, playlist) e torna se il file riappare. Il file nuovo è per definizione senza impronta: appare come traccia nuova da riconoscere, finché il processo in background non lo raggiunge.
+   - **Ricollegamento retroattivo**: l'impronta calcolata dopo può ricollegare una traccia ancora segnata come mancante. Servono due impronte: quella della traccia vecchia (calcolata prima dello spostamento) e quella del file nuovo, disponibile solo quando il passaggio in background lo raggiunge. Se la regola di §8.7 punto 1 è soddisfatta (impronta uguale a quella di esattamente una traccia mancante della stessa libreria), la traccia nuova viene unita a quella vecchia. Una traccia mai hashata prima di sparire non si può ricollegare in questo modo.
+   - **Restringimento dei candidati senza leggere nulla** (da decidere nel design, non provato qui): un semplice spostamento o rinomina conserva dimensione e data di modifica, quindi (dimensione, data di modifica, eventualmente durata dall'intestazione) individua i candidati senza letture in più, e l'impronta A serve solo a confermare. Limite: una modifica dei tag insieme allo spostamento cambia dimensione e data, e il candidato non si trova; in quel caso resta solo l'impronta A in background.
 4. Il calcolo in background può riusare la lettura che già fa Chromaprint (stesso file letto una volta per le due impronte): da verificare in fase di implementazione, non misurato qui.
 5. Nota di design emersa dalla prova: due copie identiche dello stesso audio (copia in raccolta) hanno la stessa impronta, quindi non si ricollegano automaticamente (vedi par. 3). La regola "esattamente una traccia mancante" di §8.7 punto 1 è corretta così com'è.
 

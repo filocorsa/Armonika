@@ -145,7 +145,7 @@ fn fp_sampled(path: &Path) -> Result<Fp, String> {
                 .map_err(|e| format!("seek mid: {e}"))?;
             read_n(&mut *fmt, tid, SAMPLE_PACKETS, &mut h, &mut cnt)?;
             // Last 16 packets: seek near the end, keep a ring of the final ones.
-            let back = (d / 50).max(1); // about 2% of the track, enough for 16 packets in practice
+            let back = (d / 50).max(1); // about 2% of the track, read sequentially to EOF (grows with track length)
             fmt.seek(SeekMode::Coarse, SeekTo::Timestamp { ts: Timestamp::new(d.saturating_sub(back) as i64), track_id: tid })
                 .map_err(|e| format!("seek end: {e}"))?;
             let mut ring: std::collections::VecDeque<Box<[u8]>> = Default::default();
