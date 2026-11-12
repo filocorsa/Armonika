@@ -334,3 +334,33 @@ fn rejects_empty_formats() {
     };
     assert!(generate_big_library(&s, dir.path()).is_err());
 }
+
+#[test]
+fn collision_suffix_keeps_component_limit() {
+    let long = "y".repeat(300);
+    let parts = PathParts {
+        album_artist: Some("Artist"),
+        track_artist: "Artist",
+        album: Some("Album"),
+        year: 2000,
+        disc: 1,
+        multi_disc: false,
+        track: 1,
+        title: &long,
+        extension: "flac",
+    };
+    let mut alloc = PathAllocator::new();
+    let first = alloc.allocate(build_relative_path(&parts));
+    let second = alloc.allocate(build_relative_path(&parts));
+    let third = alloc.allocate(build_relative_path(&parts));
+    assert_ne!(first.to_lowercase(), second.to_lowercase());
+    assert_ne!(second.to_lowercase(), third.to_lowercase());
+    for p in [&first, &second, &third] {
+        assert!(p.chars().count() <= 200);
+        for comp in p.split('/') {
+            assert_windows_safe(comp);
+        }
+        assert!(p.ends_with(".flac"));
+    }
+    assert!(second.ends_with(" (2).flac"));
+}

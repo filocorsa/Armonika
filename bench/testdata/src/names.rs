@@ -197,8 +197,11 @@ impl PathAllocator {
         let mut n = 2u32;
         loop {
             let suffix = format!(" ({n})");
-            let fixed = clen(dir) + clen(&suffix) + clen(ext);
-            let room = MAX_PATH_CHARS.saturating_sub(fixed).max(1);
+            let tail = clen(&suffix) + clen(ext);
+            let room = MAX_COMPONENT_CHARS
+                .saturating_sub(tail)
+                .min(MAX_PATH_CHARS.saturating_sub(clen(dir) + tail))
+                .max(1);
             let short: String = stem.chars().take(room).collect();
             let candidate = format!("{dir}{}{suffix}{ext}", trim_end_bad(&short));
             if self.used.insert(candidate.to_lowercase()) {
