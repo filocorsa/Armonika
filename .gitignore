@@ -36,3 +36,7 @@ Thumbs.db
 # Spike downloads (never commit media)
 /spikes/02-metube/downloads/
 /spikes/02-metube/target/
+
+# Spike 3 build output and work files (covers, generated test files)
+/spikes/03-tags/target/
+/spikes/03-tags/work/
