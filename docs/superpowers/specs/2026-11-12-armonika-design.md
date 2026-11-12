@@ -255,6 +255,52 @@ Riassunto: **aggiunge musica a una libreria solo chi ha il permesso di gestione 
 - Fase 1: il permesso "download offline" è già rispettato dall'API Subsonic.
 - Fase 2: gestione di utenti, librerie e permessi dall'interfaccia web; caricamento dal browser; limiti di spazio.
 
+### 8.6 Percorso di un brano importato
+
+Questa sezione descrive passo per passo cosa succede a un file dall'arrivo all'ascolto. Vale per tutte le vie di ingresso (browser, MeTube, `inbox`). Integra §8.2 e §8.5; in caso di dubbio vale questa sezione.
+
+**1. Arrivo**
+- Possono aggiungere musica solo gli utenti con permesso di gestione sulla libreria di destinazione (§8.5). Valgono i limiti di spazio e i controlli di sicurezza (§8.5).
+- **Caricamento a pezzi con ripresa.** Il caricamento dal browser divide i file in parti; se la connessione cade, riprende da dove si era fermato invece di ricominciare. Va previsto nell'API nativa dalla prima versione del caricamento. *(Scelta di Claude.)*
+- **Le app Subsonic non possono caricare**: l'API Subsonic non lo prevede. Si carica dall'interfaccia web o dall'API nativa (quindi anche da script e strumenti di terzi).
+- **File non audio** (anche dentro uno zip): si tengono le immagini di copertina (`.jpg`, `.jpeg`, `.png`, `.webp`) e i testi sincronizzati (`.lrc`), associati ai brani della stessa cartella. Tutto il resto (`.cue`, `.log`, `.pdf`, `.txt`, eccetera) viene scartato con un avviso. *(Scelta di Claude.)*
+
+**2. Sosta in coda**
+- I file in attesa stanno in una **cartella di sosta** dentro `data`, separata da ogni libreria. Non compaiono in ricerca, navigazione e API Subsonic. Chi ha la gestione sulla libreria può ascoltarli in anteprima dall'interfaccia web.
+- Nessuna scadenza automatica: un elemento resta in coda finché qualcuno decide. L'interfaccia mostra da quanto tempo aspetta.
+- Lo spazio dei file in sosta conta già nei limiti di spazio (libreria e utente).
+- Scartare un elemento lo sposta nel cestino della libreria (§8.5), non lo cancella subito.
+
+**3. Analisi**
+- Armonika legge i tag, calcola l'impronta audio, cerca le corrispondenze e calcola il proprio punteggio di confidenza (§8.2).
+- **Unità di revisione: l'album** *(decisa con l'utente)*. I file che appartengono allo stesso album (stessa cartella, stessi tag di album/artista, o stessa release su MusicBrainz) vengono raggruppati e confermati insieme, come fa beets. I brani isolati (es. da MeTube) sono gruppi da un solo brano. Chi gestisce può separare un brano da un gruppo o unire due gruppi.
+- **Controllo doppioni** *(regola decisa con l'utente, dettagli di Claude)*. Un doppione è un brano che corrisponde alla stessa registrazione (stesso identificativo MusicBrainz, oppure impronta audio quasi identica) di un brano già presente.
+  - **Nella stessa libreria**: l'avviso "già presente" si mostra sempre, chiunque abbia aggiunto l'altro file, con chi l'ha aggiunto, quando e il confronto di qualità (formato, bitrate, durata). Chi gestisce sceglie: **sostituisci** (il vecchio file va nel cestino; preferiti, valutazioni e playlist passano al nuovo), **tieni entrambi** o **scarta**. Non c'è un'opzione predefinita: va scelto ogni volta.
+  - **In un'altra libreria a cui l'utente ha accesso**: si mostra solo un'informazione ("presente anche in Famiglia"), senza bloccare nulla. Lo stesso brano in due librerie è permesso.
+  - **In una libreria a cui l'utente non ha accesso**: non si mostra **nulla**, per non rivelare il contenuto di librerie altrui.
+
+**4. Revisione e conferma**
+- **Ogni elemento passa da una conferma umana** *(decisa con l'utente)*, anche se i tag sono già perfetti. Per rendere veloce il caso facile ci sono "conferma così com'è" (tiene i tag attuali) e "conferma tutti quelli sopra la soglia" (conferma in blocco i gruppi con confidenza alta). L'importazione automatica senza conferma potrà essere aggiunta dopo, quando il punteggio sarà stato misurato su file veri.
+- Un brano non riconosciuto si conferma con tag scritti a mano. Campi obbligatori: titolo e artista; se mancano l'album o il numero di traccia, il brano va nella cartella dei singoli dell'artista (vedi punto 5).
+- Quando una persona apre un gruppo per rivederlo, il gruppo risulta "in revisione da" quella persona, e gli altri non possono confermarlo nello stesso momento. Il blocco scade dopo 30 minuti di inattività. *(Scelta di Claude.)*
+
+**5. Scrittura nella libreria**
+- **Formato audio: questione aperta** *(decisa con l'utente)*. La prima versione **non converte mai** i file: entrano con formato e qualità originali. È la scelta che lascia aperte entrambe le strade, perché una conversione opzionale si può aggiungere dopo, mentre un file convertito non torna alla qualità originale. La conversione per lo streaming avviene al volo e non tocca il file.
+- **Copertina**: incorporata nel file e salvata anche come `cover.jpg` nella cartella dell'album, così la leggono tutti i programmi. *(Scelta di Claude.)*
+- **Schema dei nomi** (default, configurabile per libreria): `Artista Album/Album (Anno)/NN - Titolo.ext`. Casi speciali:
+  - raccolte di artisti vari: `Various Artists/Album (Anno)/NN - Artista - Titolo.ext`;
+  - album su più dischi: `Album (Anno)/Disco N/NN - Titolo.ext`;
+  - brani senza album: `Artista/Singoli/Titolo.ext`;
+  - caratteri non ammessi nei nomi di file su Windows, macOS o Linux vengono sostituiti; nomi troppo lunghi vengono accorciati;
+  - se due file finirebbero nello stesso percorso, il secondo prende un suffisso (`(2)`) e la cosa viene segnalata. **Non si sovrascrive mai un file.**
+- **Operazione a prova di interruzione.** Ogni conferma è un'operazione registrata nel database a passi: copia del file nella libreria con un nome temporaneo, scrittura dei tag sulla copia, verifica che la copia sia leggibile, rinomina al nome definitivo, indicizzazione, rimozione dalla sosta. Se il server si spegne a metà, al riavvio Armonika completa o annulla l'operazione; un file non resta mai a metà e non si perde mai l'originale prima che la copia sia verificata.
+
+**6. Dopo l'importazione**
+- Il brano ricorda chi l'ha aggiunto, quando e da quale via; questo dato serve ai limiti di spazio e alla cronologia, non dà diritti speciali.
+- **In una libreria condivisa non esistono proprietari dei brani**: chiunque abbia la gestione su quella libreria può modificare o eliminare qualsiasi brano, anche aggiunto da altri. Chi vuole musica che controlla solo lui la mette nella propria libreria personale.
+- Se un utente perde il permesso di gestione o viene eliminato, la musica che ha aggiunto resta nella libreria.
+- L'operazione resta nel registro e si può annullare (§8.2).
+
 ## 9. Fasi
 
 Ogni fase si chiude solo quando il suo **criterio di uscita** è vero.
