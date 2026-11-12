@@ -1,0 +1,12 @@
+services:
+  metube:
+    image: ghcr.io/alexta69/metube:latest
+    container_name: armonika-metube
+    ports:
+      - "8081:8081"
+    environment:
+      # Let the API delete the file together with the history entry
+      # (POST /delete with "delete_files": true).
+      - DELETE_FILE_ON_TRASHCAN=ask
+    volumes:
+      - ./downloads:/downloads

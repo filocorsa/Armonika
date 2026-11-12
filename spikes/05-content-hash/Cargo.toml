@@ -1,0 +1,15 @@
+[package]
+name = "spike-content-hash"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+# Standalone throwaway project: not part of the Armonika workspace.
+[workspace]
+
+[dependencies]
+symphonia = { version = "0.6.1", features = ["all"] }
+blake3 = "1.8"
+lofty = "0.25.5"
+serde_json = "1"

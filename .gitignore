@@ -1,5 +1,5 @@
 # Rust
-/target/
+target/
 **/*.rs.bk
 
 # Web UI
@@ -29,3 +29,21 @@ Thumbs.db
 
 # Old brand drafts, not part of the project
 /images/old/
+
+# Generated benchmark data
+/bench/data/
+
+# Spike downloads (never commit media)
+/spikes/02-metube/downloads/
+/spikes/02-metube/target/
+
+# Spike 3 build output and work files (covers, generated test files)
+/spikes/03-tags/target/
+/spikes/03-tags/work/
+
+# Spike 6 build output
+/spikes/06-decode-fingerprint/target/
+
+# Spike 4 build output
+/spikes/04-recognition/target/
+/spikes/04-recognition/__pycache__/

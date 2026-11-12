@@ -1,0 +1,534 @@
+# Manifest of the "messy on purpose" library, read by `gen-messy`.
+#
+# Sources are real Creative Commons recordings, downloaded on demand and checked by hash.
+#
+#   [[source]]
+#   id = "nin-ghosts-01"            # unique; the downloaded file is stored as <id>.<ext>
+#   source_url = "https://..."      # direct download link
+#   sha256 = "..."                  # lowercase hex SHA-256 of the downloaded file
+#   license = "CC BY-NC-SA 3.0"
+#   attribution = "Nine Inch Nails, Ghosts I-IV"
+#   recording_mbid = "..."          # MusicBrainz recording id
+#   release_mbid = "..."            # MusicBrainz release id of the edition
+#
+# Damages are applied to the source with the same id, in file order:
+#
+#   [[damage]]
+#   source = "nin-ghosts-01"
+#   kind = "youtube_title"          # youtube_title | strip_tags | strip_cover | split_album
+#                                   # | duplicate_other_format | compilation_copy | wrong_case
+#   format = "mp3"                  # only for duplicate_other_format: mp3 | flac | ogg | opus
+#                                   # | m4a | wav | aiff
+#
+# Every recording_mbid below was checked on MusicBrainz (the recording is on release_mbid)
+# and confirmed by an AcoustID lookup of the downloaded file. Provenance, licenses and
+# verification results are in README.md.
+
+[[source]]
+id = "nin-ghosts-01"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/01_Ghosts_I.flac"
+sha256 = "a2c829315198ea28ac724c59ed53129d572511c40893edf6cf1463ef10b2cac2"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "b2fdf3ce-78a6-4e01-9a7b-441700e8ea66"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-02"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/02_Ghosts_I_320kb.mp3"
+sha256 = "01a60d4e04ada0bc9d92c34623844e70cacb32001b60be45e9b3f1ee656c8154"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "1f3f0aed-47ed-42f4-b1b6-f02f2a13437c"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-05"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/05_Ghosts_I.flac"
+sha256 = "e92279630224e8132fffca6c6bf784e6293bfd1d3a8aaaaa1060f4f7a801aaf7"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "132a7820-4a29-4745-bf20-222386434f47"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-07"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/07_Ghosts_I_320kb.mp3"
+sha256 = "abbb1c0cb064da0eb2f07581eab501330921a57652d0497dd762f33df2cb9714"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "1d1bb32a-5bc6-4b6f-88cc-c043f6c52509"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-10"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/10_Ghosts_II.flac"
+sha256 = "be3f4319be8e7c6ca962d52bc2cfdc36eda7559adac36bf73d5e695db98f9795"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "226f53e6-ec5f-4783-8684-65bc3c85665b"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-11"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/11_Ghosts_II_320kb.mp3"
+sha256 = "8667bab79cacaadcdf72fc77fc2d96fc3a7dc8992a95c4df2d32fdf3aa0aeaed"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "a95eeadf-9c4a-486d-9610-58a41b6f43ed"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-15"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/15_Ghosts_II.flac"
+sha256 = "597bc16064e538d7477136d6c20c9ecfb1ada910a13ca5b2a56df922a30a1550"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "2d7f08e1-be1c-4b86-b725-6e675b7b6de0"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-19"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/19_Ghosts_III_320kb.mp3"
+sha256 = "b036d0c6f7bebf2655ba74bd3818d99c1007b8769b2a7b1e0979ac39e92bf717"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "1668f841-f56b-4dc6-a0b2-482bd30f98d6"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-22"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/22_Ghosts_III.flac"
+sha256 = "4efd7842cdca68bc4e27e3fcbec6f501c9a75c084516c88a1bd6a3b59a0b5319"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "c8795f14-8162-4caa-98c2-0d80b1338034"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-25"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/25_Ghosts_III_320kb.mp3"
+sha256 = "c7253ea397558a41f7cc1333ffead6f88ef3bd2405d9b48e6ce888d0d4ebadde"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "68d1bdc5-4af4-4f16-9277-96cb4c909635"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-28"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/28_Ghosts_IV.ogg"
+sha256 = "0dca9a7c95fad8a4680ee1b798d6b1adbc7fe641f7f061696e9a66d213549dd6"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "e491d339-8f23-4941-af6d-d151bd6a3bfd"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-ghosts-36"
+source_url = "https://archive.org/download/nineinchnails_ghosts_I_IV/36_Ghosts_IV.ogg"
+sha256 = "00c641b9102dcfbd1b1c2f12f7b99ad6fee7af0bf0a3c947359cd07547d7caf7"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, Ghosts I-IV"
+recording_mbid = "e2c0fc50-94fa-4919-8c64-2dbfc9ec1c07"
+release_mbid = "3af7ec8c-3bf4-4e6d-9bb3-1885d22b2b6a"
+
+[[source]]
+id = "nin-slip-01"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/01_999999.flac"
+sha256 = "35bd127aa181807a23ca421cd42b63930e8950b5da2dbad4906e5414f5ca6ff5"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "30f3f33e-8d0c-4e69-8539-cbd701d18f28"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-02"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/02_1000000.flac"
+sha256 = "6f0618aecab4813bf91087e84498b1b4ae5a3f6b95cf86d7f1daf595762e9bfa"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "99244237-850b-4a93-904d-57305bcadb4e"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-03"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/03_letting_you.flac"
+sha256 = "e3bae60e70d479742a899021e138209967f0ec4b13703d5b6e563c37d4c0c96c"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "b4a88e68-f66e-4155-8ef4-9f9f46944767"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-04"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/04_discipline.flac"
+sha256 = "f6adeaab665aad7f6c46bcdecccbdb1c2a65e0ab35f1006b3a5f727611cfabfa"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "a58a2b13-70b5-44c2-9fd5-67f93db17de7"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-05"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/05_echoplex.flac"
+sha256 = "2a5a274bc0ec13c8c9f0679db0ff61dc60c2158383c69098d8f16354f554ddd3"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "52646e3f-1fc0-4a1d-a089-08ac33a30973"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-06"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/06_head_down.mp3"
+sha256 = "28f3d8edbf8a40ca3e60c81dc814fc484f9a3fd4d36e9a475bbcce952fdc8ce2"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "b4f9917f-4514-4e3e-aea3-3f901a9c69a7"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-07"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/07_lights_in_the_sky.mp3"
+sha256 = "269bd8e016eaf5ccf375d670cb9fd4e6362b32da3686ab0a06205367d812c171"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "d7d5eb38-bb10-4cd8-9542-f489e9f16e73"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-08"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/08_corona_radiata.mp3"
+sha256 = "8c004fbcc8abe5f9a148f565b44e9afa83a0b047b5d3a15c3a6e05423c00b6e2"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "3c55ef28-626b-4cb2-81a6-acc37b189a3f"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-09"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/09_the_four_of_us_are_dying.ogg"
+sha256 = "1d27970885d6de58382eabaa5b1527c7f0a3fe7df6e48e0f9750174c5425c8ef"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "d7cbbdd6-96da-4da5-b01f-53eb72e73d16"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "nin-slip-10"
+source_url = "https://archive.org/download/nine_inch_nails_the_slip/10_demon_seed.ogg"
+sha256 = "1b5be42eea8ee04b732b8594306fc1ab12319e8013b7dda4ff7864bfce3fca9e"
+license = "CC BY-NC-SA 3.0 US"
+attribution = "Nine Inch Nails, The Slip"
+recording_mbid = "9f06df64-a373-492e-9a23-6a14a3fde97e"
+release_mbid = "12b57d46-a192-499e-a91f-7da66790a1c1"
+
+[[source]]
+id = "woodward-heretoday-01"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/01-Incoherent.ogg"
+sha256 = "6d710bf86b9ec1fa4aea77ecf389df04e12ecfc58c58b5910d5479a676c81229"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "e584534f-2090-408c-8518-83d4ea5cbf8a"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-02"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/02-MonaLisa.ogg"
+sha256 = "84c10d6513ed5179c0221bbb36c1d5c4dade76b5eaec3b10b3034e6f537de11f"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "095de530-63bc-4680-bc36-c5a2d24f8e3c"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-03"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/03-Dust.ogg"
+sha256 = "028ae0afe853d2116a937a101c7d67c19a17b1929ebc1df8420c496476eb811e"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "e7d29e25-2dcb-45fe-8cc5-c240f1d7d500"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-04"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/04-Troublemaker.ogg"
+sha256 = "ad71c50602369269706bce4b8c963fd55e0056b4a3219773c3268e5288827a4b"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "36e8c8f8-0a3f-4c71-a307-f4c596d3a248"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-05"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/05-HouseInMyHead.ogg"
+sha256 = "e50afaa9e934ea996bfcb383510b2b1e3f59239de9de9d83e0aef56c0ce59ff9"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "bfda21cc-5dab-44ab-9754-2b527a666f2b"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-06"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/06-LearnToFly.ogg"
+sha256 = "787e402cd1bde52ea32087407e07828bb96f31ec3f8179aa8d633aed8aefa3d5"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "df33b640-a729-472e-8737-1aec83eb82a2"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "woodward-heretoday-07"
+source_url = "https://archive.org/download/JoshWoodward-HereToday/07-NothingInTheDark.ogg"
+sha256 = "7823cf7fd33a9385fa4640f9372877f7129d0e8b8ebefdc6f278590f0e683aa6"
+license = "CC BY 3.0"
+attribution = "Josh Woodward, Here Today"
+recording_mbid = "8b897dfd-6925-4461-a969-006bd22c4326"
+release_mbid = "fed79b91-cbd4-4d9c-8261-e7e9b48f3b61"
+
+[[source]]
+id = "bradsucks-mess-01"
+source_url = "https://archive.org/download/jamendo-117853/01-1001519-Brad%20Sucks-In%20Your%20Face.mp3"
+sha256 = "3c8800972b5032bf5ed8e1f54c991c317c477075bd8db7114433709a5f9eb4dd"
+license = "CC BY-NC-SA 3.0"
+attribution = "Brad Sucks, Guess Who's a Mess"
+recording_mbid = "a2923af5-1571-40b6-b707-04f842ebf503"
+release_mbid = "e6577867-6876-4f54-98b1-da0db635bd51"
+
+[[source]]
+id = "bradsucks-mess-02"
+source_url = "https://archive.org/download/jamendo-117853/02-1001520-Brad%20Sucks-Come%20Back.mp3"
+sha256 = "be27d3bb03851f2cd4f76605f1a083a344008e1ebd278deaafba1eb787b09eb6"
+license = "CC BY-NC-SA 3.0"
+attribution = "Brad Sucks, Guess Who's a Mess"
+recording_mbid = "1694727d-30ac-46b5-9f42-6f746b4e5c1b"
+release_mbid = "e6577867-6876-4f54-98b1-da0db635bd51"
+
+[[source]]
+id = "bradsucks-mess-03"
+source_url = "https://archive.org/download/jamendo-117853/03-1001521-Brad%20Sucks-Feel%20Free_%20Plastic%20Surgery_.mp3"
+sha256 = "cc14eec2f65b4d274132f28771adc6d38286431770b18f9d50744614d66416c8"
+license = "CC BY-NC-SA 3.0"
+attribution = "Brad Sucks, Guess Who's a Mess"
+recording_mbid = "2c0ab49c-0a46-4f3a-a39d-130d5fb75afb"
+release_mbid = "e6577867-6876-4f54-98b1-da0db635bd51"
+
+[[source]]
+id = "bradsucks-mess-04"
+source_url = "https://archive.org/download/jamendo-117853/04-1001522-Brad%20Sucks-Guess%20Who_s%20a%20Mess.mp3"
+sha256 = "b395cdaab42e7ba74dec6deb405054ebe0ba86857d76ae0bbb1a85ab9b74828d"
+license = "CC BY-NC-SA 3.0"
+attribution = "Brad Sucks, Guess Who's a Mess"
+recording_mbid = "09fe51b4-0c9c-4aa4-a916-dec24eeba5ed"
+release_mbid = "e6577867-6876-4f54-98b1-da0db635bd51"
+
+[[source]]
+id = "bradsucks-mess-05"
+source_url = "https://archive.org/download/jamendo-117853/05-1001523-Brad%20Sucks-Waste%20of%20TV.mp3"
+sha256 = "56ab84d57036ab8cbfce8d7201d678a970738c68e1c6eac92fb35a93b0d01108"
+license = "CC BY-NC-SA 3.0"
+attribution = "Brad Sucks, Guess Who's a Mess"
+recording_mbid = "536d06f4-45f3-4578-993a-7306f02ec6dc"
+release_mbid = "e6577867-6876-4f54-98b1-da0db635bd51"
+
+[[damage]]
+source = "nin-ghosts-01"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-01"
+kind = "strip_cover"
+
+[[damage]]
+source = "nin-ghosts-01"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "nin-ghosts-02"
+kind = "youtube_title"
+
+[[damage]]
+source = "nin-ghosts-02"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "nin-ghosts-05"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-05"
+kind = "compilation_copy"
+
+[[damage]]
+source = "nin-ghosts-07"
+kind = "wrong_case"
+
+[[damage]]
+source = "nin-ghosts-10"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-10"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "nin-ghosts-11"
+kind = "strip_tags"
+
+[[damage]]
+source = "nin-ghosts-15"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-15"
+kind = "wrong_case"
+
+[[damage]]
+source = "nin-ghosts-22"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-22"
+kind = "strip_cover"
+
+[[damage]]
+source = "nin-ghosts-22"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "nin-ghosts-25"
+kind = "youtube_title"
+
+[[damage]]
+source = "nin-ghosts-28"
+kind = "split_album"
+
+[[damage]]
+source = "nin-ghosts-36"
+kind = "strip_tags"
+
+[[damage]]
+source = "nin-ghosts-36"
+kind = "duplicate_other_format"
+format = "mp3"
+
+[[damage]]
+source = "nin-slip-01"
+kind = "strip_cover"
+
+[[damage]]
+source = "nin-slip-01"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "nin-slip-02"
+kind = "youtube_title"
+
+[[damage]]
+source = "nin-slip-02"
+kind = "strip_cover"
+
+[[damage]]
+source = "nin-slip-02"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "nin-slip-03"
+kind = "compilation_copy"
+
+[[damage]]
+source = "nin-slip-04"
+kind = "wrong_case"
+
+[[damage]]
+source = "nin-slip-04"
+kind = "duplicate_other_format"
+format = "ogg"
+
+[[damage]]
+source = "nin-slip-05"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "nin-slip-06"
+kind = "strip_tags"
+
+[[damage]]
+source = "nin-slip-08"
+kind = "youtube_title"
+
+[[damage]]
+source = "nin-slip-09"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "nin-slip-10"
+kind = "compilation_copy"
+
+[[damage]]
+source = "woodward-heretoday-01"
+kind = "youtube_title"
+
+[[damage]]
+source = "woodward-heretoday-01"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "woodward-heretoday-02"
+kind = "wrong_case"
+
+[[damage]]
+source = "woodward-heretoday-03"
+kind = "strip_tags"
+
+[[damage]]
+source = "woodward-heretoday-04"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "woodward-heretoday-05"
+kind = "compilation_copy"
+
+[[damage]]
+source = "woodward-heretoday-06"
+kind = "duplicate_other_format"
+format = "flac"
+
+[[damage]]
+source = "bradsucks-mess-01"
+kind = "strip_cover"
+
+[[damage]]
+source = "bradsucks-mess-02"
+kind = "youtube_title"
+
+[[damage]]
+source = "bradsucks-mess-02"
+kind = "duplicate_other_format"
+format = "opus"
+
+[[damage]]
+source = "bradsucks-mess-03"
+kind = "wrong_case"
+
+[[damage]]
+source = "bradsucks-mess-04"
+kind = "strip_tags"
+
+[[damage]]
+source = "bradsucks-mess-04"
+kind = "duplicate_other_format"
+format = "m4a"
+
+[[damage]]
+source = "bradsucks-mess-05"
+kind = "compilation_copy"
