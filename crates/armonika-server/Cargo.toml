@@ -1,0 +1,21 @@
+[package]
+name = "armonika-server"
+description = "The armonika server binary"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "armonika"
+path = "src/main.rs"
+
+[dependencies]
+armonika-core = { path = "../armonika-core" }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+
+[lints]
+workspace = true
