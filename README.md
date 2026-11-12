@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="images/armonika-brand-kit/armonika-logo-dark.svg">
-    <img alt="Armonika" src="images/armonika-brand-kit/armonika-logo-light.svg" width="420">
-  </picture>
+  <img alt="Armonika" src="images/armonika-brand-kit/armonika-logo-banner.svg" width="480">
 </p>
 
 <p align="center"><strong>The lightweight self-hosted music server that puts your library in order.</strong></p>

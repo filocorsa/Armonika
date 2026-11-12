@@ -20,6 +20,7 @@ Scritta: **Inter Display Black** (licenza SIL Open Font). Nei file SVG il testo 
 ```
 armonika-logo-light.svg / .png / .jpg   logo esteso, sfondo chiaro
 armonika-logo-dark.svg  / .png / .jpg   logo esteso, sfondo scuro
+armonika-logo-banner.svg                logo esteso dark con il suo sfondo scuro arrotondato, leggibile su sfondi chiari e scuri (README)
 armonika-icon-light.svg / .png / .jpg   icona, sfondo chiaro
 armonika-icon-dark.svg  / .png / .jpg   icona, sfondo scuro
 armonika-favicon.svg                    favicon semplificata (8 denti, niente solchi)
