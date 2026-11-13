@@ -8,3 +8,16 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.36.0"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt"] }
+unicode-normalization = "0.1.26"
+uuid = { version = "1.29.2", features = ["v7"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
