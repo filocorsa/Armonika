@@ -86,7 +86,7 @@ async fn bootstrap_admin(db: &Db, secrets: &SecretBox) -> anyhow::Result<()> {
 }
 
 /// Creates the libraries of the configuration file that are not in the database yet,
-/// and logs as warnings what it did not apply.
+/// logs each one created at info level and, as warnings, what it did not apply.
 async fn sync_libraries(db: &Db, config: &Config) -> anyhow::Result<()> {
     let configured = config.libraries.clone();
     let data_dir = config.data_dir.clone();
@@ -95,7 +95,11 @@ async fn sync_libraries(db: &Db, config: &Config) -> anyhow::Result<()> {
         .await
         .context("cannot create the configured libraries")?;
     for note in notes {
-        tracing::warn!("{note}");
+        if note.is_warning() {
+            tracing::warn!("{note}");
+        } else {
+            tracing::info!("{note}");
+        }
     }
     Ok(())
 }

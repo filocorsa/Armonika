@@ -89,6 +89,58 @@ fn remove_without_yes_changes_nothing() {
     assert!(song.is_file());
 }
 
+/// The phrase of the hint printed when a removed or renamed library is still configured.
+const CONFIG_HINT: &str = "otherwise it will be created again at the next start";
+
+#[test]
+fn remove_and_rename_hint_when_library_is_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = mkdir(dir.path(), "music");
+    let jazz = mkdir(dir.path(), "jazz");
+    let other = mkdir(dir.path(), "other");
+    std::fs::write(
+        dir.path().join("armonika.toml"),
+        format!(
+            "[[library]]\nname = \"Main\"\npath = '{music}'\n\n\
+             [[library]]\nname = \"Jazz\"\npath = '{jazz}'\n"
+        ),
+    )
+    .unwrap();
+    for (name, path) in [("Main", &music), ("Jazz", &jazz), ("Other", &other)] {
+        let (ok, _, err) = armonika(dir.path(), &["library", "add", name, path], "");
+        assert!(ok, "{err}");
+    }
+
+    // A configured library: renaming it prints the hint on stderr.
+    let (ok, out, err) = armonika(dir.path(), &["library", "rename", "Main", "Home"], "");
+    assert!(ok, "{out}{err}");
+    assert!(
+        err.contains(CONFIG_HINT) && err.contains("armonika.toml"),
+        "{err}"
+    );
+    assert!(!out.contains(CONFIG_HINT), "{out}");
+
+    // Only printing what would be removed gives no hint; removing does, also when the
+    // name is typed with another case.
+    let (ok, _, err) = armonika(dir.path(), &["library", "remove", "Jazz"], "");
+    assert!(ok, "{err}");
+    assert!(!err.contains(CONFIG_HINT), "{err}");
+    let (ok, out, err) = armonika(dir.path(), &["library", "remove", "jazz", "--yes"], "");
+    assert!(ok, "{out}{err}");
+    assert!(
+        err.contains(CONFIG_HINT) && err.contains("ARMONIKA_"),
+        "{err}"
+    );
+
+    // Libraries that are not configured: no hint.
+    let (ok, _, err) = armonika(dir.path(), &["library", "rename", "Other", "Spare"], "");
+    assert!(ok, "{err}");
+    assert!(!err.contains(CONFIG_HINT), "{err}");
+    let (ok, _, err) = armonika(dir.path(), &["library", "remove", "Home", "--yes"], "");
+    assert!(ok, "{err}");
+    assert!(!err.contains(CONFIG_HINT), "{err}");
+}
+
 #[test]
 fn user_grant_then_revoke() {
     let dir = tempfile::tempdir().unwrap();

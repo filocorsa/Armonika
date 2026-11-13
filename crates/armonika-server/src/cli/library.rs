@@ -9,6 +9,8 @@ use armonika_core::db::{Connection, Db};
 use armonika_core::libraries::{self, Library};
 use clap::Subcommand;
 
+use crate::config::Config;
+
 /// Manage libraries.
 #[derive(Debug, Subcommand)]
 pub enum LibraryCommand {
@@ -47,9 +49,10 @@ pub enum LibraryCommand {
     },
 }
 
-/// Runs a `library` subcommand on the database `db`; `data_dir` is the data directory,
-/// which no library may overlap.
-pub fn run(db: &Db, data_dir: &std::path::Path, command: LibraryCommand) -> anyhow::Result<()> {
+/// Runs a `library` subcommand on the database `db` with the configuration `config`
+/// (its data directory, which no library may overlap, and its configured libraries).
+pub fn run(db: &Db, config: &Config, command: LibraryCommand) -> anyhow::Result<()> {
+    let data_dir = config.data_dir.as_path();
     match command {
         LibraryCommand::Add { name, path } => {
             let id = db.write_blocking(|c| libraries::create(c, &name, &path, data_dir))?;
@@ -62,6 +65,7 @@ pub fn run(db: &Db, data_dir: &std::path::Path, command: LibraryCommand) -> anyh
         LibraryCommand::Rename { old, new } => {
             db.write_blocking(|c| libraries::rename(c, find(c, &old)?.id, &new))?;
             println!("renamed library {old} to {new}");
+            hint_if_configured(config, &old);
         }
         LibraryCommand::SetPath { name, path } => {
             let root = db.write_blocking(|c| {
@@ -79,6 +83,7 @@ pub fn run(db: &Db, data_dir: &std::path::Path, command: LibraryCommand) -> anyh
                      changed; no file was touched",
                     summary.tracks, summary.playlists_touched
                 );
+                hint_if_configured(config, &name);
             } else {
                 let summary =
                     db.read_blocking(|c| libraries::removal_summary(c, find(c, &name)?.id))?;
@@ -92,6 +97,23 @@ pub fn run(db: &Db, data_dir: &std::path::Path, command: LibraryCommand) -> anyh
         }
     }
     Ok(())
+}
+
+/// After a rename or a removal: `serve` creates every configured library that is not in
+/// the database, so a library still configured under its old name comes back at the next
+/// start. Names are compared without ASCII case, like in the database.
+fn hint_if_configured(config: &Config, name: &str) {
+    if config
+        .libraries
+        .iter()
+        .any(|l| l.name.eq_ignore_ascii_case(name))
+    {
+        eprintln!(
+            "note: the library {name:?} is in the configuration: also remove it from \
+             armonika.toml (or the ARMONIKA_ environment), otherwise it will be created again \
+             at the next start"
+        );
+    }
 }
 
 /// The library called `name`, or [`armonika_core::Error::LibraryNameNotFound`].

@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Library(command) => {
             let db = cli::open_db(&config)?;
-            cli::library::run(&db, &config.data_dir, command)
+            cli::library::run(&db, &config, command)
         }
     }
 }

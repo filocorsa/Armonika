@@ -234,7 +234,17 @@ fn config_creates_only_missing_libraries() {
     f.db.write_blocking(|c| {
         let main = libraries::create(c, "Main", &music, &data)?;
         let notes = libraries::sync_from_config(c, &config, &data)?;
-        assert!(notes.is_empty(), "{notes:?}");
+        // Only the created library is reported, as information.
+        assert_eq!(
+            notes,
+            [SyncNote::Created {
+                name: "Jazz".into(),
+                root: dunce::canonicalize(&jazz).unwrap(),
+            }]
+        );
+        assert!(!notes[0].is_warning());
+        let text = notes[0].to_string();
+        assert!(text.contains("Jazz") && text.contains("jazz"), "{text}");
         let list = libraries::list(c)?;
         assert_eq!(list.len(), 2);
         assert_eq!(libraries::by_name(c, "Main")?.unwrap().id, main);
@@ -262,7 +272,7 @@ fn config_creates_only_missing_libraries() {
         assert!(
             notes
                 .iter()
-                .all(|n| matches!(n, SyncNote::NotCreated { .. }))
+                .all(|n| matches!(n, SyncNote::NotCreated { .. }) && n.is_warning())
         );
         assert_eq!(libraries::list(c)?.len(), 2);
         Ok(())
@@ -297,6 +307,7 @@ fn database_wins_over_config_path() {
         assert_eq!(db_root, &dunce::canonicalize(&music).unwrap());
         let text = notes[0].to_string();
         assert!(text.contains("Main") && text.contains("set-path"), "{text}");
+        assert!(notes[0].is_warning());
 
         let lib = libraries::by_name(c, "Main")?.unwrap();
         assert_eq!(lib.id, id);

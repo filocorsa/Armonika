@@ -48,9 +48,16 @@ pub struct RemovalSummary {
     pub playlists_touched: u64,
 }
 
-/// Something [`sync_from_config`] did not do, for the server log.
+/// Something [`sync_from_config`] did or did not do, for the server log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SyncNote {
+    /// The configured library did not exist and was created.
+    Created {
+        /// Name of the library.
+        name: String,
+        /// Its root as stored, canonical.
+        root: PathBuf,
+    },
     /// The library exists with another root: the database wins and the configured path
     /// is ignored.
     PathDiffers {
@@ -72,9 +79,21 @@ pub enum SyncNote {
     },
 }
 
+impl SyncNote {
+    /// Whether the note reports a configured library that was not applied as written.
+    pub fn is_warning(&self) -> bool {
+        !matches!(self, SyncNote::Created { .. })
+    }
+}
+
 impl fmt::Display for SyncNote {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SyncNote::Created { name, root } => write!(
+                f,
+                "created library {name:?} at {} from the configuration",
+                root.display()
+            ),
             SyncNote::PathDiffers {
                 name,
                 config_path,
@@ -209,8 +228,8 @@ pub fn by_name(conn: &Connection, name: &str) -> Result<Option<Library>> {
         .optional()?)
 }
 
-/// Creates the configured libraries whose name does not exist yet. For a library that
-/// exists the database wins: a different configured path is not applied and gives a
+/// Creates the configured libraries whose name does not exist yet, each reported by a
+/// [`SyncNote::Created`]. For a library that exists the database wins: a different configured path is not applied and gives a
 /// [`SyncNote::PathDiffers`]. A configured library that cannot be created (for example
 /// a missing directory) gives a [`SyncNote::NotCreated`] and the others go on.
 pub fn sync_from_config(
@@ -231,7 +250,10 @@ pub fn sync_from_config(
             continue;
         }
         match create(conn, &lib.name, &lib.path, data_dir) {
-            Ok(_) => {}
+            Ok(id) => notes.push(SyncNote::Created {
+                name: lib.name.clone(),
+                root: require_root(conn, id)?,
+            }),
             Err(
                 e @ (Error::LibraryRoot { .. }
                 | Error::InvalidLibraryName(_)
@@ -283,6 +305,14 @@ fn checked_root(
 /// paths.
 fn root_to_db(canonical: &Path) -> String {
     canonical.to_string_lossy().into_owned()
+}
+
+/// The stored root of the library `id`.
+fn require_root(conn: &Connection, id: LibraryId) -> Result<PathBuf> {
+    let root: String = conn.query_row("SELECT root FROM libraries WHERE id = ?1", [id.0], |r| {
+        r.get(0)
+    })?;
+    Ok(PathBuf::from(root))
 }
 
 fn require(conn: &Connection, id: LibraryId) -> Result<()> {
