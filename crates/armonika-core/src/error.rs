@@ -81,6 +81,12 @@ pub enum Error {
     /// The user has no API key with this label.
     #[error("no API key labelled {0:?} for this user")]
     ApiKeyNotFound(String),
+    /// No track has this identifier.
+    #[error("track not found: {0}")]
+    TrackNotFound(crate::ids::TrackId),
+    /// No library album has this identifier.
+    #[error("album not found: {0}")]
+    AlbumNotFound(crate::ids::LibraryAlbumId),
     /// No library has this identifier.
     #[error("library not found: {0}")]
     LibraryNotFound(crate::ids::LibraryId),

@@ -1,6 +1,9 @@
-use armonika_core::artists::{CreditArtist, resolve_artists, split_credit};
+use armonika_core::artists::{
+    CreditArtist, link_album_artists, link_track_artists, reconcile_artists, resolve_artists,
+    split_credit,
+};
 use armonika_core::db::{Connection, Db};
-use armonika_core::ids::{ArtistId, LibraryId, resolve_artist};
+use armonika_core::ids::{ArtistId, LibraryAlbumId, LibraryId, TrackId, resolve_artist};
 use rusqlite::params;
 
 struct Fixture {
@@ -165,7 +168,16 @@ fn feat_is_split() {
     }
 
     // Brackets that cannot be split safely keep the credit whole.
-    for credit in ["A (ft. B) & C", "feat. B", "A feat."] {
+    for credit in [
+        "A (ft. B) & C",
+        "feat. B",
+        "A feat.",
+        // A separator inside an open bracket, an unclosed bracket.
+        "A (ft. B; C)",
+        "A [feat. B; C]",
+        "A (ft. B",
+        "A (ft. B feat. C)",
+    ] {
         assert_eq!(names(&text_only(credit)), [credit]);
     }
 }
@@ -332,7 +344,8 @@ fn join_phrases_rebuild_credit() {
     for credit in [
         "Queen feat. David Bowie",
         "A (ft. B)",
-        "A [feat. B; C]",
+        "A [feat. B]",
+        "A (ft. B) feat. C",
         "A Featuring B ft. C",
         "Simon & Garfunkel",
     ] {
@@ -396,13 +409,215 @@ fn mbid_artist_name_follows_credit() {
         let tx = c.transaction()?;
         let lib = add_library(&tx, "Main");
         let first = resolve_artists(&tx, lib, &[named("Prince", Some("mb-p"))], None)?;
+        tx.execute("UPDATE artists SET updated_at = 0", [])?;
         let second = resolve_artists(&tx, lib, &[named("The Artist", Some("mb-p"))], None)?;
         assert_eq!(first, second);
+        let updated: i64 = tx.query_row("SELECT updated_at FROM artists", [], |r| r.get(0))?;
+        assert!(updated > 0);
         let (name, norm): (String, String) =
             tx.query_row("SELECT name, norm_name FROM artists", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })?;
         assert_eq!((name.as_str(), norm.as_str()), ("The Artist", "the artist"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Inserts a present track in `library` with no artists.
+fn new_track(conn: &Connection, library: LibraryId) -> TrackId {
+    let n: i64 = conn
+        .query_row("SELECT count(*) FROM tracks", [], |r| r.get(0))
+        .unwrap();
+    let id = format!("t-new{n}");
+    conn.execute(
+        "INSERT INTO tracks (public_id, library_id, state, rel_path, size, mtime_ms,
+                             tag_schema, format, added_at, updated_at)
+         VALUES (?1, ?2, 'present', ?3, 1, 0, 1, 'flac', 0, 0)",
+        params![id, library.0, format!("new{n}.flac")],
+    )
+    .unwrap();
+    id.parse().unwrap()
+}
+
+/// Inserts an album in `library` with no artists.
+fn new_album(conn: &Connection, library: LibraryId) -> LibraryAlbumId {
+    let n: i64 = conn
+        .query_row("SELECT count(*) FROM library_albums", [], |r| r.get(0))
+        .unwrap();
+    let id = format!("al-new{n}");
+    conn.execute(
+        "INSERT INTO library_albums (public_id, library_id, group_key, title, artist_credit,
+                                     created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'Album', 'Artist', 0, 0)",
+        params![id, library.0, format!("newkey{n}")],
+    )
+    .unwrap();
+    id.parse().unwrap()
+}
+
+type TrackRow = (ArtistId, String, String, bool);
+
+/// Rows of the track: artist, credited name, join phrase, matched_by_name.
+fn track_rows(conn: &Connection, track: &TrackId) -> Vec<TrackRow> {
+    conn.prepare(
+        "SELECT a.public_id, ta.credited_name, ta.join_phrase, ta.matched_by_name
+         FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
+         JOIN artists a ON a.id = ta.artist_id
+         WHERE t.public_id = ?1 ORDER BY ta.position",
+    )
+    .unwrap()
+    .query_map([track.as_str()], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+    })
+    .unwrap()
+    .collect::<rusqlite::Result<_>>()
+    .unwrap()
+}
+
+/// Rows of the album: artist, matched_by_name.
+fn album_rows(conn: &Connection, album: &LibraryAlbumId) -> Vec<(ArtistId, bool)> {
+    conn.prepare(
+        "SELECT a.public_id, aa.matched_by_name
+         FROM album_artists aa JOIN library_albums al ON al.id = aa.album_id
+         JOIN artists a ON a.id = aa.artist_id
+         WHERE al.public_id = ?1 ORDER BY aa.position",
+    )
+    .unwrap()
+    .query_map([album.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+    .unwrap()
+    .collect::<rusqlite::Result<_>>()
+    .unwrap()
+}
+
+#[test]
+fn link_track_artists_replaces_rows() {
+    let f = Fixture::new();
+    f.db.write_blocking(|c| {
+        let tx = c.transaction()?;
+        let lib = add_library(&tx, "Main");
+        let track = new_track(&tx, lib);
+        let ids = link_track_artists(&tx, &track, &text_only("A feat. B"), None)?;
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            track_rows(&tx, &track),
+            [
+                (ids[0].clone(), "A".to_owned(), " feat. ".to_owned(), false),
+                (ids[1].clone(), "B".to_owned(), String::new(), false),
+            ]
+        );
+        let ids = link_track_artists(&tx, &track, &text_only("C"), Some("C, The"))?;
+        assert_eq!(
+            track_rows(&tx, &track),
+            [(ids[0].clone(), "C".to_owned(), String::new(), false)]
+        );
+        assert_eq!(sort_name(&tx, &ids[0]).as_deref(), Some("C, The"));
+
+        let album = new_album(&tx, lib);
+        let ids = link_album_artists(&tx, &album, &text_only("A; C"), None)?;
+        assert_eq!(
+            album_rows(&tx, &album),
+            [(ids[0].clone(), false), (ids[1].clone(), false)]
+        );
+        let ids = link_album_artists(&tx, &album, &text_only("B"), None)?;
+        assert_eq!(album_rows(&tx, &album), [(ids[0].clone(), false)]);
+
+        // An unknown track is an error.
+        let missing: TrackId = "t-missing".parse().unwrap();
+        assert!(link_track_artists(&tx, &missing, &text_only("A"), None).is_err());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn name_only_seen_before_mbid_joins_after_reconcile() {
+    let f = Fixture::new();
+    f.db.write_blocking(|c| {
+        let tx = c.transaction()?;
+        let lib = add_library(&tx, "Main");
+        let early = new_track(&tx, lib);
+        let name_only = link_track_artists(&tx, &early, &[named("Queen", None)], None)?;
+        let album = new_album(&tx, lib);
+        let with_mbid = link_album_artists(&tx, &album, &[named("Queen", Some("mb-q"))], None)?;
+        assert_ne!(name_only, with_mbid);
+
+        tx.execute("UPDATE artists SET updated_at = 0", [])?;
+        let mut touched = reconcile_artists(&tx, lib)?;
+        touched.sort();
+        let mut expected = vec![name_only[0].clone(), with_mbid[0].clone()];
+        expected.sort();
+        assert_eq!(touched, expected);
+        assert_eq!(
+            track_rows(&tx, &early),
+            [(
+                with_mbid[0].clone(),
+                "Queen".to_owned(),
+                String::new(),
+                true
+            )]
+        );
+        assert_eq!(album_rows(&tx, &album), [(with_mbid[0].clone(), false)]);
+        let stale: i64 = tx.query_row(
+            "SELECT count(*) FROM artists WHERE updated_at = 0 AND public_id IN (?1, ?2)",
+            [name_only[0].as_str(), with_mbid[0].as_str()],
+            |r| r.get(0),
+        )?;
+        assert_eq!(stale, 0);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn homonym_appearing_later_splits_name_only_links() {
+    let f = Fixture::new();
+    f.db.write_blocking(|c| {
+        let tx = c.transaction()?;
+        let lib = add_library(&tx, "Main");
+        let first = new_track(&tx, lib);
+        let mb1 = link_track_artists(&tx, &first, &[named("John Smith", Some("mb-1"))], None)?;
+        let plain = new_track(&tx, lib);
+        // Matched at link time to the only mbid artist with that name.
+        assert_eq!(
+            link_track_artists(&tx, &plain, &[named("john smith", None)], None)?,
+            mb1
+        );
+        assert!(track_rows(&tx, &plain)[0].3);
+        // A homonym with another mbid appears in the library.
+        let second = new_track(&tx, lib);
+        let mb2 = link_track_artists(&tx, &second, &[named("John Smith", Some("mb-2"))], None)?;
+        assert_ne!(mb1, mb2);
+
+        reconcile_artists(&tx, lib)?;
+        let rows = track_rows(&tx, &plain);
+        assert_ne!(rows[0].0, mb1[0]);
+        assert_ne!(rows[0].0, mb2[0]);
+        assert_eq!(rows[0].1, "john smith");
+        assert!(!rows[0].3);
+        assert_eq!(track_rows(&tx, &first)[0].0, mb1[0]);
+        assert_eq!(track_rows(&tx, &second)[0].0, mb2[0]);
+        assert_eq!(artist_count(&tx), 3);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn reconcile_is_idempotent() {
+    let f = Fixture::new();
+    f.db.write_blocking(|c| {
+        let tx = c.transaction()?;
+        let lib = add_library(&tx, "Main");
+        let a = new_track(&tx, lib);
+        link_track_artists(&tx, &a, &text_only("Muse feat. Queen"), None)?;
+        let b = new_track(&tx, lib);
+        link_track_artists(&tx, &b, &[named("Muse", Some("mb-muse"))], None)?;
+        assert!(!reconcile_artists(&tx, lib)?.is_empty());
+        let before = (track_rows(&tx, &a), track_rows(&tx, &b), artist_count(&tx));
+        assert!(reconcile_artists(&tx, lib)?.is_empty());
+        let after = (track_rows(&tx, &a), track_rows(&tx, &b), artist_count(&tx));
+        assert_eq!(before, after);
         Ok(())
     })
     .unwrap();

@@ -3,15 +3,20 @@
 //!
 //! A credit such as `"Queen feat. David Bowie"` is split into the artists it names only
 //! when the split is safe ([`split_credit`]), then each artist is found or created
-//! ([`resolve_artists`]). An artist is identified by its MusicBrainz id when known,
-//! otherwise by its normalized name.
+//! ([`resolve_artists`]) and linked to its track or album ([`link_track_artists`],
+//! [`link_album_artists`]). An artist is identified by its MusicBrainz id when known,
+//! otherwise by its normalized name ([`norm_name`]). [`reconcile_artists`] re-applies
+//! the rule for name-only credits at the end of a scan, so the result does not depend
+//! on scan order.
+
+use std::collections::{BTreeSet, HashMap};
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::Result;
 use crate::db::now_ms;
-use crate::ids::{ArtistId, LibraryId};
+use crate::ids::{ArtistId, LibraryAlbumId, LibraryId, TrackId, resolve_album, resolve_track};
 use crate::text::normalize;
+use crate::{Error, Result};
 
 /// One artist of a credit, like a row of `artist_credit_name` in MusicBrainz.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,10 +186,11 @@ fn split_text(credit: &str) -> Option<Vec<CreditArtist>> {
         end: credit.len(),
         closer: None,
     });
+    let last = separators.len() - 1;
     let mut out = Vec::with_capacity(separators.len());
     let mut name_start = 0;
     let mut open: Option<char> = None;
-    for sep in separators {
+    for (i, sep) in separators.into_iter().enumerate() {
         if sep.start <= name_start {
             return None;
         }
@@ -194,16 +200,14 @@ fn split_text(credit: &str) -> Option<Vec<CreditArtist>> {
                 name = rest.trim_end();
                 open = None;
             }
-            // A bracket closed before more text, or an empty name inside the brackets.
-            if name.contains(closer) || name.is_empty() {
+            // A bracket closed before more text, an empty name inside the brackets, or
+            // another separator inside the brackets ("A (ft. B; C)").
+            if name.contains(closer) || name.is_empty() || (open.is_some() && i != last) {
                 return None;
             }
         }
-        if let Some(closer) = sep.closer {
-            if open.is_some() {
-                return None;
-            }
-            open = Some(closer);
+        if sep.closer.is_some() {
+            open = sep.closer;
         }
         let name_end = name_start + name.len();
         out.push(CreditArtist {
@@ -213,7 +217,8 @@ fn split_text(credit: &str) -> Option<Vec<CreditArtist>> {
         });
         name_start = sep.end;
     }
-    (out.len() > 1).then_some(out)
+    // An unclosed bracket ("A (ft. B") is not a safe split either.
+    (out.len() > 1 && open.is_none()).then_some(out)
 }
 
 /// The separators of `credit` (trimmed), each widened to the spaces around it and to an
@@ -285,23 +290,50 @@ fn trailing_spaces(s: &str) -> usize {
     s.len() - s.trim_end().len()
 }
 
-/// An artist found or created by [`resolve_artist_keys`]. Core-internal: `key` is the
-/// internal key, for inserts into `track_artists` and `album_artists` inside the core.
-pub(crate) struct ResolvedArtist {
-    pub(crate) key: i64,
-    pub(crate) id: ArtistId,
+/// Normalized name of an artist: the only normalization used to match artists by name
+/// (`artists.norm_name`, the unique-name rule, [`reconcile_artists`]). It is
+/// [`normalize`], except that a name made only of punctuation (like the band "!!!"),
+/// which normalizes to nothing, keeps its own lowercase text.
+pub(crate) fn norm_name(name: &str) -> String {
+    let norm = normalize(name);
+    if norm.is_empty() {
+        name.trim().to_lowercase()
+    } else {
+        norm
+    }
 }
 
-/// Finds or creates the artist of every entry of `list`, in order. The caller then
-/// stores in `track_artists` or `album_artists`, by position, the artist with the
-/// entry's `credited_name` and `join_phrase`.
+/// An artist found or created for one entry of a credit.
+struct Resolved {
+    key: i64,
+    id: ArtistId,
+    /// The entry had no mbid and was attached to an artist with one by the unique-name
+    /// rule.
+    matched_by_name: bool,
+}
+
+/// Condition on the artist `a`: linked to tracks or albums of the library `?1` by rows
+/// that came from a real mbid (not themselves matched by name).
+const LINKED_IN_LIBRARY: &str = "(EXISTS (SELECT 1 FROM track_artists ta
+                     JOIN tracks t ON t.id = ta.track_id
+                     WHERE ta.artist_id = a.id AND ta.matched_by_name = 0
+                       AND t.library_id = ?1)
+         OR EXISTS (SELECT 1 FROM album_artists aa
+                    JOIN library_albums al ON al.id = aa.album_id
+                    WHERE aa.artist_id = a.id AND aa.matched_by_name = 0
+                      AND al.library_id = ?1))";
+
+/// Finds or creates the artist of every entry of `list`, in order. Prefer
+/// [`link_track_artists`] and [`link_album_artists`], which also store the links.
 ///
 /// - With an mbid: the artist with that mbid, created if missing; its name follows the
 ///   credit when it changes.
 /// - Without an mbid: if exactly one artist with an mbid and the same normalized name
-///   is linked to tracks or albums of `library`, that artist (§8.7 point 7); otherwise
-///   the artist without mbid with that normalized name, created if missing. Homonyms
-///   (more than one such mbid artist) keep the name-only tracks on a separate artist.
+///   is linked (through a credit that had the mbid) to tracks or albums of `library`,
+///   that artist (§8.7 point 7); otherwise the artist without mbid with that normalized
+///   name, created if missing. Homonyms (more than one such mbid artist) keep the
+///   name-only credits on a separate artist. The result depends on what is already
+///   linked; [`reconcile_artists`] makes it independent of scan order.
 ///
 /// `sort` (the `ARTISTSORT` or `ALBUMARTISTSORT` tag) is stored as the artist's
 /// `sort_name` only when the credit has a single artist. Every change to an artist sets
@@ -312,19 +344,18 @@ pub fn resolve_artists(
     list: &[CreditArtist],
     sort: Option<&str>,
 ) -> Result<Vec<ArtistId>> {
-    Ok(resolve_artist_keys(tx, library, list, sort)?
+    Ok(resolve_list(tx, library, list, sort)?
         .into_iter()
         .map(|a| a.id)
         .collect())
 }
 
-/// Same as [`resolve_artists`], also returning the internal keys. Core-internal.
-pub(crate) fn resolve_artist_keys(
+fn resolve_list(
     tx: &Transaction<'_>,
     library: LibraryId,
     list: &[CreditArtist],
     sort: Option<&str>,
-) -> Result<Vec<ResolvedArtist>> {
+) -> Result<Vec<Resolved>> {
     let now = now_ms();
     let sort = sort
         .map(str::trim)
@@ -347,18 +378,7 @@ pub(crate) fn resolve_artist_keys(
     Ok(out)
 }
 
-/// Normalized name used for artist identity. A name made only of punctuation (like the
-/// band "!!!") normalizes to nothing, so it keeps its own lowercase text instead.
-fn norm_name(name: &str) -> String {
-    let norm = normalize(name);
-    if norm.is_empty() {
-        name.trim().to_lowercase()
-    } else {
-        norm
-    }
-}
-
-fn by_mbid(tx: &Transaction<'_>, mbid: &str, name: &str, now: i64) -> Result<ResolvedArtist> {
+fn by_mbid(tx: &Transaction<'_>, mbid: &str, name: &str, now: i64) -> Result<Resolved> {
     let found = tx
         .prepare_cached("SELECT id, public_id, name FROM artists WHERE mbid = ?1")?
         .query_row([mbid], |r| {
@@ -369,7 +389,7 @@ fn by_mbid(tx: &Transaction<'_>, mbid: &str, name: &str, now: i64) -> Result<Res
             ))
         })
         .optional()?;
-    match found {
+    let (key, id) = match found {
         Some((key, id, current)) => {
             if current != name {
                 tx.prepare_cached(
@@ -377,44 +397,52 @@ fn by_mbid(tx: &Transaction<'_>, mbid: &str, name: &str, now: i64) -> Result<Res
                 )?
                 .execute(params![key, name, norm_name(name), now])?;
             }
-            Ok(ResolvedArtist { key, id })
+            (key, id)
         }
-        None => insert(tx, name, Some(mbid), now),
-    }
+        None => insert(tx, name, Some(mbid), now)?,
+    };
+    Ok(Resolved {
+        key,
+        id,
+        matched_by_name: false,
+    })
 }
 
-fn by_name(
-    tx: &Transaction<'_>,
-    library: LibraryId,
-    name: &str,
-    now: i64,
-) -> Result<ResolvedArtist> {
+fn by_name(tx: &Transaction<'_>, library: LibraryId, name: &str, now: i64) -> Result<Resolved> {
     let norm = norm_name(name);
+    let sql = format!(
+        "SELECT a.id, a.public_id FROM artists a
+         WHERE a.norm_name = ?2 AND a.mbid IS NOT NULL AND {LINKED_IN_LIBRARY}
+         LIMIT 2"
+    );
     let linked: Vec<(i64, ArtistId)> = tx
-        .prepare_cached(
-            "SELECT a.id, a.public_id FROM artists a
-             WHERE a.norm_name = ?1 AND a.mbid IS NOT NULL
-               AND (EXISTS (SELECT 1 FROM track_artists ta JOIN tracks t ON t.id = ta.track_id
-                            WHERE ta.artist_id = a.id AND t.library_id = ?2)
-                    OR EXISTS (SELECT 1 FROM album_artists aa
-                               JOIN library_albums al ON al.id = aa.album_id
-                               WHERE aa.artist_id = a.id AND al.library_id = ?2))
-             LIMIT 2",
-        )?
-        .query_map(params![norm, library.0], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .prepare_cached(&sql)?
+        .query_map(params![library.0, norm], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     if let [(key, id)] = linked.as_slice() {
-        return Ok(ResolvedArtist {
+        return Ok(Resolved {
             key: *key,
             id: id.clone(),
+            matched_by_name: true,
         });
     }
+    let (key, id) = name_only(tx, &norm, name, now)?;
+    Ok(Resolved {
+        key,
+        id,
+        matched_by_name: false,
+    })
+}
+
+/// The artist without mbid for the normalized name `norm`, created with the display
+/// name `name` if missing.
+fn name_only(tx: &Transaction<'_>, norm: &str, name: &str, now: i64) -> Result<(i64, ArtistId)> {
     let found = tx
         .prepare_cached("SELECT id, public_id FROM artists WHERE norm_name = ?1 AND mbid IS NULL")?
-        .query_row([&norm], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row([norm], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     match found {
-        Some((key, id)) => Ok(ResolvedArtist { key, id }),
+        Some(found) => Ok(found),
         None => insert(tx, name, None, now),
     }
 }
@@ -424,15 +452,182 @@ fn insert(
     name: &str,
     mbid: Option<&str>,
     now: i64,
-) -> Result<ResolvedArtist> {
+) -> Result<(i64, ArtistId)> {
     let id = ArtistId::generate();
     tx.prepare_cached(
         "INSERT INTO artists (public_id, name, norm_name, mbid, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?
     .execute(params![id, name, norm_name(name), mbid, now])?;
-    Ok(ResolvedArtist {
-        key: tx.last_insert_rowid(),
-        id,
-    })
+    Ok((tx.last_insert_rowid(), id))
+}
+
+/// A table of artist links (`track_artists` or `album_artists`) and its owner table.
+struct LinkTable {
+    links: &'static str,
+    owner_col: &'static str,
+    owners: &'static str,
+}
+
+const TRACK_LINKS: LinkTable = LinkTable {
+    links: "track_artists",
+    owner_col: "track_id",
+    owners: "tracks",
+};
+
+const ALBUM_LINKS: LinkTable = LinkTable {
+    links: "album_artists",
+    owner_col: "album_id",
+    owners: "library_albums",
+};
+
+/// Resolves the artists of the credit `list` ([`resolve_artists`], in the track's
+/// library) and replaces the track's rows of `track_artists` with them, by position,
+/// with each entry's `credited_name` and `join_phrase`. Returns the artists in order.
+pub fn link_track_artists(
+    tx: &Transaction<'_>,
+    track: &TrackId,
+    list: &[CreditArtist],
+    sort: Option<&str>,
+) -> Result<Vec<ArtistId>> {
+    let key = resolve_track(tx, track)?.ok_or_else(|| Error::TrackNotFound(track.clone()))?;
+    link(tx, &TRACK_LINKS, key, list, sort)
+}
+
+/// Same as [`link_track_artists`] for the artists of a library album (`album_artists`).
+pub fn link_album_artists(
+    tx: &Transaction<'_>,
+    album: &LibraryAlbumId,
+    list: &[CreditArtist],
+    sort: Option<&str>,
+) -> Result<Vec<ArtistId>> {
+    let key = resolve_album(tx, album)?.ok_or_else(|| Error::AlbumNotFound(album.clone()))?;
+    link(tx, &ALBUM_LINKS, key, list, sort)
+}
+
+fn link(
+    tx: &Transaction<'_>,
+    table: &LinkTable,
+    owner: i64,
+    list: &[CreditArtist],
+    sort: Option<&str>,
+) -> Result<Vec<ArtistId>> {
+    let LinkTable {
+        links,
+        owner_col,
+        owners,
+    } = table;
+    let library: i64 = tx
+        .prepare_cached(&format!("SELECT library_id FROM {owners} WHERE id = ?1"))?
+        .query_row([owner], |r| r.get(0))?;
+    // The old rows go first, so they do not count as links of the library.
+    tx.prepare_cached(&format!("DELETE FROM {links} WHERE {owner_col} = ?1"))?
+        .execute([owner])?;
+    let resolved = resolve_list(tx, LibraryId(library), list, sort)?;
+    let mut insert = tx.prepare_cached(&format!(
+        "INSERT INTO {links} ({owner_col}, position, artist_id, credited_name, join_phrase,
+                              matched_by_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+    ))?;
+    for (position, (entry, artist)) in (0_i64..).zip(list.iter().zip(&resolved)) {
+        insert.execute(params![
+            owner,
+            position,
+            artist.key,
+            entry.credited_name,
+            entry.join_phrase,
+            artist.matched_by_name
+        ])?;
+    }
+    Ok(resolved.into_iter().map(|a| a.id).collect())
+}
+
+/// Re-applies the identity rule of §8.7 point 7 to every artist link of `library`
+/// whose credit had no mbid (links to name-only artists and links matched by name), so
+/// that the result does not depend on the order in which files were scanned:
+///
+/// - if exactly one artist with an mbid and the same normalized name is linked to
+///   tracks or albums of the library through a credit with that mbid, the link points
+///   to it (matched by name);
+/// - otherwise it points to the name-only artist with that normalized name, created if
+///   missing.
+///
+/// Returns the artists whose links changed (both the old and the new artist of each
+/// moved link), after setting their `updated_at`. Running it again changes nothing.
+/// The scanner calls it once at the end of each scan.
+pub fn reconcile_artists(tx: &Transaction<'_>, library: LibraryId) -> Result<Vec<ArtistId>> {
+    let now = now_ms();
+    // Normalized name to the only mbid artist with it in the library (None if several).
+    let mut unique: HashMap<String, Option<i64>> = HashMap::new();
+    let sql = format!(
+        "SELECT a.id, a.norm_name FROM artists a
+         WHERE a.mbid IS NOT NULL AND {LINKED_IN_LIBRARY}"
+    );
+    let mut stmt = tx.prepare_cached(&sql)?;
+    let mut rows = stmt.query([library.0])?;
+    while let Some(row) = rows.next()? {
+        let (key, norm): (i64, String) = (row.get(0)?, row.get(1)?);
+        unique
+            .entry(norm)
+            .and_modify(|v| *v = None)
+            .or_insert(Some(key));
+    }
+    drop(rows);
+    drop(stmt);
+
+    let mut name_only_keys: HashMap<String, i64> = HashMap::new();
+    let mut touched: BTreeSet<i64> = BTreeSet::new();
+    for table in [&TRACK_LINKS, &ALBUM_LINKS] {
+        let LinkTable {
+            links,
+            owner_col,
+            owners,
+        } = table;
+        let candidates: Vec<(i64, i64, i64, String, bool)> = tx
+            .prepare_cached(&format!(
+                "SELECT l.{owner_col}, l.position, l.artist_id, l.credited_name,
+                        l.matched_by_name
+                 FROM {links} l
+                 JOIN {owners} o ON o.id = l.{owner_col}
+                 JOIN artists a ON a.id = l.artist_id
+                 WHERE o.library_id = ?1 AND (a.mbid IS NULL OR l.matched_by_name = 1)"
+            ))?
+            .query_map([library.0], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut update = tx.prepare_cached(&format!(
+            "UPDATE {links} SET artist_id = ?3, matched_by_name = ?4
+             WHERE {owner_col} = ?1 AND position = ?2"
+        ))?;
+        for (owner, position, current, credited, matched) in candidates {
+            let norm = norm_name(&credited);
+            let target = match unique.get(&norm) {
+                Some(Some(key)) => (*key, true),
+                _ => {
+                    let key = match name_only_keys.get(&norm) {
+                        Some(key) => *key,
+                        None => {
+                            let (key, _) = name_only(tx, &norm, &credited, now)?;
+                            name_only_keys.insert(norm, key);
+                            key
+                        }
+                    };
+                    (key, false)
+                }
+            };
+            if target != (current, matched) {
+                update.execute(params![owner, position, target.0, target.1])?;
+                touched.insert(current);
+                touched.insert(target.0);
+            }
+        }
+    }
+
+    let mut bump =
+        tx.prepare_cached("UPDATE artists SET updated_at = ?2 WHERE id = ?1 RETURNING public_id")?;
+    touched
+        .into_iter()
+        .map(|key| Ok(bump.query_row(params![key, now], |r| r.get(0))?))
+        .collect()
 }
