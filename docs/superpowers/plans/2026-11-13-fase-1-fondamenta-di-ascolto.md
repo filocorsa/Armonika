@@ -22,6 +22,21 @@ Sono scelte lasciate al builder (§12) o casi che il design non copre. Ognuna è
 6. **Immagine Docker su GHCR privato** finché la repository è privata (Task 21): sul server di casa serve `docker login ghcr.io` con un token personale, oppure si costruisce l'immagine sul posto.
 7. **Musica vera per l'uscita della fase** (Task 25). Il criterio di uscita (uso quotidiano, rimisura della ricerca su una libreria vera, prima scansione su un HDD vero) richiede una libreria musicale vera e un HDD. Va deciso con l'utente da dove viene la musica.
 
+## Revisione dello schema contro MusicBrainz (2026-11-13, approvata dall'utente)
+
+Lo schema del Task 2 è stato confrontato con le `CREATE TABLE` di MusicBrainz (`admin/sql/CreateTables.sql` di `metabrainz/musicbrainz-server`). Cambi adottati, ognuno nel task indicato:
+
+1. **Reindirizzamenti dopo le unioni** (come `*_gid_redirect`): tabella `id_redirects`, scritta da ogni unione di tracce (Task 9) e di album della libreria (Task 8) e consultata da ogni ricerca per identificativo (Task 2, Task 12). Le app Subsonic salvano gli identificativi nei dispositivi; dopo un'unione devono continuare a trovarli.
+2. **Date parziali, edizione e prima pubblicazione** (come `release_country.date_*` e `recording_first_release_date`): `date_*` e `orig_date_*` (Task 5), date dell'album (Task 8), `releaseDate` e `originalReleaseDate` nelle API (Task 13).
+3. **Numero di traccia come testo** (come `track.number TEXT` accanto a `position`): `track_number_text` più `track_no` per ordinare; `disc_subtitle` (come `medium.name`) (Task 5, Task 13).
+4. **Nome accreditato e testo di unione** (come `artist_credit_name.name` e `join_phrase`): in `track_artists` e `album_artists` (Task 6).
+5. **`TAG_SCHEMA_VERSION`**: un tag letto in più in futuro fa rileggere i file una volta sola, invece di restare vuoto sui file che la scansione incrementale salta (Task 5, Task 7).
+6. **Nomi per l'ordinamento** (come `sort_name`): dai tag `*SORT` (Task 5, Task 6, Task 13).
+7. **`updated_at` su album e artisti** (come `last_updated`), per `ifModifiedSince` (Task 6, Task 8, Task 13).
+8. **Chiave interna intera e identificativo pubblico** (come `id SERIAL` e `gid UUID`): `id INTEGER PRIMARY KEY` per i collegamenti, `public_id` per le API (Task 2).
+
+Non adottati (da aggiungere con il punto 5 quando servono): alias multilingue degli artisti, più canzoni per registrazione, ISRC, etichetta, numero di catalogo, codice a barre, paese, tipo e stato dell'edizione.
+
 ## Global Constraints
 
 - Licenza AGPL-3.0; ogni crate nuova ha `license.workspace = true`, `edition.workspace = true`, `version.workspace = true`, `repository.workspace = true` e `[lints] workspace = true`.
@@ -142,62 +157,80 @@ docs/phase-1-acceptance.md         esito dell'uscita della fase
   - `Db::open(path: &Path) -> Result<Db>`: WAL, `foreign_keys=ON`, `busy_timeout=5000`, `synchronous=NORMAL`; applica le migrazioni. `Db` è `Clone` (Arc interno): uno scrittore (`Mutex<Connection>`) e un pool r2d2 di 4 lettori.
   - `Db::read<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T>` (async, `spawn_blocking`), `Db::write` uguale ma con `&mut Connection`; `Db::read_blocking`, `Db::write_blocking` per scanner e CLI.
   - Migrazioni: file `migrations/NNNN_*.sql` incorporati con `include_str!`, versione in `PRAGMA user_version`, ognuna in una transazione. Niente crate esterne per le migrazioni.
-  - `ids.rs`: newtype `TrackId`, `LibraryAlbumId`, `ArtistId`, `UserId`, `PlaylistId` (String) con `::generate()` = prefisso + UUID v7 in esadecimale senza trattini (`t`, `al`, `ar`, `u`, `pl` seguiti da `-`, es. `t-0193...`), `as_str()`, `FromStr` che valida il prefisso; `LibraryId(i64)` (le app Subsonic si aspettano un intero per le cartelle musicali).
+  - `ids.rs`: newtype degli **identificativi pubblici** `TrackId`, `LibraryAlbumId`, `ArtistId`, `UserId`, `PlaylistId` (String) con `::generate()` = prefisso + UUID v7 in esadecimale senza trattini (`t`, `al`, `ar`, `u`, `pl` seguiti da `-`, es. `t-0193...`), `as_str()`, `FromStr` che valida il prefisso; `LibraryId(i64)` (le app Subsonic si aspettano un intero per le cartelle musicali). Nel database sono la colonna `public_id`; i collegamenti tra tabelle usano la chiave interna `id INTEGER`.
+  - **Regola di confine:** le funzioni pubbliche del core ricevono e restituiscono identificativi pubblici; la traduzione nella chiave interna avviene dentro il core con `ids::resolve_track(conn, &TrackId) -> Result<Option<i64>>` (e `resolve_album`, `resolve_artist`, `resolve_user`, `resolve_playlist`). Se il `public_id` non esiste, `resolve_*` lo cerca in `id_redirects` e restituisce l'entità verso cui punta. Le chiavi interne non escono mai dal core e non compaiono nelle API.
+  - `ids::add_redirect(tx, old: &str, new: &str)`: scrive il reindirizzamento e aggiorna quelli che puntavano a `old` perché puntino a `new` (catena sempre lunga uno, come i `*_gid_redirect` di MusicBrainz). Lo usano tutte le unioni (Task 8 per gli album, Task 9 per le tracce).
   - `text::normalize(s: &str) -> String`: NFKD, via i segni diacritici, minuscole, ogni carattere non alfanumerico diventa spazio, spazi compressi e tolti ai bordi (stessa normalizzazione dello spike 4). `text::fold_sort(s: &str, articles: &[&str]) -> String`: chiave di ordinamento senza articolo iniziale.
   - `paths::rel_path_to_db(rel: &Path) -> String` (separatore `/`), `paths::rel_path_from_db(s: &str) -> PathBuf`.
 
 Schema (`0001_initial.sql`). Tempi in millisecondi Unix (`INTEGER`). Questo è il contratto per tutti i task successivi:
 
 ```sql
+-- Convenzione (revisione contro lo schema di MusicBrainz, punto 8): ogni entità ha una
+-- chiave interna `id INTEGER PRIMARY KEY` usata da tutti i collegamenti e un
+-- `public_id TEXT UNIQUE` stabile, l'unico esposto nelle API.
 CREATE TABLE users (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,              -- argon2id, formato PHC
   subsonic_password BLOB NOT NULL,          -- SecretBox
   is_admin INTEGER NOT NULL DEFAULT 0, can_download INTEGER NOT NULL DEFAULT 1,
   share_now_playing INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
 CREATE TABLE api_keys (
   key_hash TEXT PRIMARY KEY,                -- blake3 esadecimale della chiave
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   label TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE libraries (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
+  id INTEGER PRIMARY KEY,                   -- esposto così com'è: le app vogliono un intero
+  name TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
   write_level TEXT NOT NULL DEFAULT 'read_only'
     CHECK (write_level IN ('read_only','tags','tags_and_organize')),
   created_at INTEGER NOT NULL);
 CREATE TABLE library_access (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
   permission TEXT NOT NULL CHECK (permission IN ('listen','manage')),
   PRIMARY KEY (user_id, library_id));
 CREATE TABLE artists (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, norm_name TEXT NOT NULL, mbid TEXT UNIQUE);
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL, norm_name TEXT NOT NULL, sort_name TEXT, mbid TEXT UNIQUE,
+  updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX artists_name_only ON artists(norm_name) WHERE mbid IS NULL;
 CREATE TABLE library_albums (
-  id TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
-  group_key TEXT NOT NULL, title TEXT NOT NULL, artist_credit TEXT NOT NULL,
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
+  library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+  group_key TEXT NOT NULL, title TEXT NOT NULL, sort_title TEXT, artist_credit TEXT NOT NULL,
   release_mbid TEXT, release_group_mbid TEXT, is_singles INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL);
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX library_albums_key ON library_albums(library_id, group_key);
 CREATE TABLE album_artists (
-  album_id TEXT NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
-  artist_id TEXT NOT NULL REFERENCES artists(id), position INTEGER NOT NULL,
+  album_id INTEGER NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, artist_id INTEGER NOT NULL REFERENCES artists(id),
+  credited_name TEXT NOT NULL, join_phrase TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (album_id, position));
 CREATE TABLE tracks (
-  id TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
+  library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
   state TEXT NOT NULL CHECK (state IN ('present','missing','deleted')),
   rel_path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ms INTEGER NOT NULL,
+  tag_schema INTEGER NOT NULL,              -- TAG_SCHEMA_VERSION con cui sono stati letti i tag
   format TEXT NOT NULL, duration_ms INTEGER, bitrate_kbps INTEGER, sample_rate INTEGER,
   channels INTEGER, bit_depth INTEGER,
   content_hash BLOB, hash_state TEXT NOT NULL DEFAULT 'pending'
     CHECK (hash_state IN ('pending','done','failed')),
   prev_content_hash BLOB,                   -- impronta prima di un ricollegamento da pre-filtro
   prev_rel_path TEXT,                       -- percorso prima di un ricollegamento da pre-filtro
-  title TEXT, artist_credit TEXT, album_title TEXT, album_artist_credit TEXT,
-  track_no INTEGER, track_total INTEGER, disc_no INTEGER, disc_total INTEGER,
-  year INTEGER, compilation INTEGER NOT NULL DEFAULT 0, has_embedded_cover INTEGER NOT NULL DEFAULT 0,
+  title TEXT, sort_title TEXT, artist_credit TEXT, artist_sort TEXT,
+  album_title TEXT, album_sort TEXT, album_artist_credit TEXT, album_artist_sort TEXT,
+  track_no INTEGER,                         -- per ordinare; NULL se il tag non è un numero
+  track_number_text TEXT,                   -- valore originale del tag (es. "A1" dei vinili)
+  track_total INTEGER, disc_no INTEGER, disc_total INTEGER, disc_subtitle TEXT,
+  date_y INTEGER, date_m INTEGER, date_d INTEGER,                 -- data dell'edizione
+  orig_date_y INTEGER, orig_date_m INTEGER, orig_date_d INTEGER,  -- prima pubblicazione
+  compilation INTEGER NOT NULL DEFAULT 0, has_embedded_cover INTEGER NOT NULL DEFAULT 0,
   mb_recording_id TEXT, mb_release_track_id TEXT, mb_release_id TEXT,
   mb_release_group_id TEXT, mb_work_id TEXT,
-  library_album_id TEXT REFERENCES library_albums(id),
+  library_album_id INTEGER REFERENCES library_albums(id),
   added_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, missing_since INTEGER);
 CREATE UNIQUE INDEX tracks_present_path ON tracks(library_id, rel_path) WHERE state = 'present';
 CREATE INDEX tracks_album ON tracks(library_album_id);
@@ -205,65 +238,69 @@ CREATE INDEX tracks_prefilter ON tracks(library_id, size, mtime_ms) WHERE state 
 CREATE INDEX tracks_hash ON tracks(library_id, content_hash);
 CREATE INDEX tracks_hash_pending ON tracks(hash_state) WHERE hash_state = 'pending';
 CREATE TABLE track_artists (
-  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-  artist_id TEXT NOT NULL REFERENCES artists(id), position INTEGER NOT NULL,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, artist_id INTEGER NOT NULL REFERENCES artists(id),
+  credited_name TEXT NOT NULL, join_phrase TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (track_id, position));
 CREATE TABLE track_genres (
-  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, genre TEXT NOT NULL,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, genre TEXT NOT NULL,
   PRIMARY KEY (track_id, genre));
+CREATE TABLE id_redirects (                 -- come i *_gid_redirect di MusicBrainz
+  old_public_id TEXT PRIMARY KEY, new_public_id TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE track_annotations (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   play_count INTEGER NOT NULL DEFAULT 0, last_played_at INTEGER,
   PRIMARY KEY (user_id, track_id));
 CREATE TABLE album_annotations (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  album_id TEXT NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  album_id INTEGER NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   PRIMARY KEY (user_id, album_id));
 CREATE TABLE artist_annotations (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  artist_id TEXT NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   PRIMARY KEY (user_id, artist_id));
 CREATE TABLE play_history (
-  id INTEGER PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, played_at INTEGER NOT NULL);
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, played_at INTEGER NOT NULL);
 CREATE TABLE playlists (
-  id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL, comment TEXT, public INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE playlist_entries (
-  playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-  position INTEGER NOT NULL, track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   PRIMARY KEY (playlist_id, position));
 CREATE TABLE play_queues (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   current_index INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed_at INTEGER NOT NULL, changed_by TEXT NOT NULL);
 CREATE TABLE play_queue_entries (
-  user_id TEXT NOT NULL REFERENCES play_queues(user_id) ON DELETE CASCADE,
-  position INTEGER NOT NULL, track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES play_queues(user_id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, position));
 CREATE TABLE now_playing (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, client TEXT NOT NULL,
-  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, started_at INTEGER NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, client TEXT NOT NULL,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, started_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, client));
 CREATE TABLE scrobble_accounts (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   service TEXT NOT NULL CHECK (service IN ('lastfm','listenbrainz')),
   secret BLOB NOT NULL, account_name TEXT, PRIMARY KEY (user_id, service));
 CREATE TABLE scrobble_outbox (
-  id INTEGER PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  service TEXT NOT NULL, track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  service TEXT NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   played_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
 Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma lo stato esiste già perché tutte le query di visibilità lo devono escludere.
 
-- [ ] **Step 1: Test che falliscono** in `tests/db.rs`: `open_applies_migrations_once` (due `open` sullo stesso file, `user_version` = 1), `foreign_keys_are_enforced` (inserire `library_access` con utente inesistente fallisce), `wal_mode_is_on`, `present_path_is_unique_but_missing_is_not` (due tracce `missing` con lo stesso `rel_path` ammesse, due `present` no), `readers_see_committed_writes`. In `tests/text.rs`: `normalize("  Beyoncé  Knowles!") == "beyonce knowles"`, `normalize("Sigur Rós") == "sigur ros"`, `normalize("AC/DC") == "ac dc"`, `normalize("坂本龍一") == "坂本龍一"`; `ids_roundtrip_and_reject_wrong_prefix`; `rel_path_uses_forward_slashes`.
+- [ ] **Step 1: Test che falliscono** in `tests/db.rs`: `open_applies_migrations_once` (due `open` sullo stesso file, `user_version` = 1), `foreign_keys_are_enforced` (inserire `library_access` con utente inesistente fallisce), `wal_mode_is_on`, `present_path_is_unique_but_missing_is_not` (due tracce `missing` con lo stesso `rel_path` ammesse, due `present` no), `readers_see_committed_writes`. In `tests/text.rs`: `normalize("  Beyoncé  Knowles!") == "beyonce knowles"`, `normalize("Sigur Rós") == "sigur ros"`, `normalize("AC/DC") == "ac dc"`, `normalize("坂本龍一") == "坂本龍一"`; `ids_roundtrip_and_reject_wrong_prefix`; `rel_path_uses_forward_slashes`; `resolve_follows_redirect`; `redirect_chains_are_flattened` (A verso B, poi B verso C: A risolve in C con una sola lettura di `id_redirects`).
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare** i moduli.
 - [ ] **Step 4:** test verdi.
@@ -325,11 +362,12 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
 
 **Interfaces:**
 - Produces:
-  - In `armonika-core::model`: `FileFacts { size: u64, mtime_ms: i64, format: AudioFormat, duration_ms: Option<u64>, bitrate_kbps: Option<u32>, sample_rate: Option<u32>, channels: Option<u8>, bit_depth: Option<u8>, tags: TagFacts }`; `TagFacts { title, artist_credit, artists: Vec<String> /* tag ARTISTS */, album_title, album_artist_credit, album_artists: Vec<String>, track_no, track_total, disc_no, disc_total, year: Option<i32>, genres: Vec<String>, compilation: bool, has_embedded_cover: bool, mb_recording_id, mb_release_track_id, mb_release_id, mb_release_group_id, mb_work_id, mb_artist_ids: Vec<String>, mb_album_artist_ids: Vec<String> }` (stringhe `Option<String>`, vuote = `None`, spazi tolti ai bordi); `AudioFormat { Mp3, Flac, Ogg, Opus, M4a, Wav, Aiff }` con `from_extension(&str) -> Option<AudioFormat>`.
-  - `armonika_media::probe::read_file(path: &Path) -> Result<FileFacts, ProbeError>`: lofty `Probe::open(path)?.guess_file_type()?.read()` (sola lettura), tag primario del formato con ripiego sugli altri tag presenti. `year` dal primo numero di 4 cifre in `RecordingDate`/`Year` (`"1975-03-01"` dà 1975). Generi multipli separati su `;` e `\0` (non sulla virgola). `compilation` da `TCMP`/`cpil`/`COMPILATION` = `1`.
+  - In `armonika-core::model`: `FileFacts { size: u64, mtime_ms: i64, format: AudioFormat, duration_ms: Option<u64>, bitrate_kbps: Option<u32>, sample_rate: Option<u32>, channels: Option<u8>, bit_depth: Option<u8>, tags: TagFacts }`; `TagFacts { title, title_sort, artist_credit, artist_sort, artists: Vec<String> /* tag ARTISTS */, album_title, album_sort, album_artist_credit, album_artist_sort, album_artists: Vec<String>, track_no: Option<u32>, track_number_text, track_total, disc_no, disc_total, disc_subtitle, date: Option<PartialDate>, original_date: Option<PartialDate>, genres: Vec<String>, compilation: bool, has_embedded_cover: bool, mb_recording_id, mb_release_track_id, mb_release_id, mb_release_group_id, mb_work_id, mb_artist_ids: Vec<String>, mb_album_artist_ids: Vec<String> }` (stringhe `Option<String>`, vuote = `None`, spazi tolti ai bordi); `PartialDate { year: i32, month: Option<u8>, day: Option<u8> }` (date parziali come in MusicBrainz); `AudioFormat { Mp3, Flac, Ogg, Opus, M4a, Wav, Aiff }` con `from_extension(&str) -> Option<AudioFormat>`.
+  - `armonika_media::probe::TAG_SCHEMA_VERSION: u32 = 1`: si incrementa ogni volta che cambia l'insieme dei tag letti o il modo di interpretarli; il Task 7 rilegge una volta tutte le tracce lette con una versione precedente. Così un tag aggiunto in una fase successiva (etichetta, numero di catalogo, tipo di edizione) non resta vuoto sui file che la scansione incrementale salterebbe.
+  - `armonika_media::probe::read_file(path: &Path) -> Result<FileFacts, ProbeError>`: lofty `Probe::open(path)?.guess_file_type()?.read()` (sola lettura), tag primario del formato con ripiego sugli altri tag presenti. `date` da `RecordingDate`/`Year` (`TDRC`, `DATE`, `©day`), `original_date` da `OriginalReleaseDate` (`TDOR`, `ORIGINALDATE`; se manca, `ORIGINALYEAR`): si accettano `YYYY`, `YYYY-MM`, `YYYY-MM-DD` e testi che iniziano con 4 cifre (`"1975-03-01T00:00"` dà 1975-03-01, `"1975?"` dà 1975). Numero di traccia: `track_number_text` è il valore del tag senza il totale (`"A1"`, `"3"`), `track_no` è il numero se il valore è un intero, altrimenti `None`; per i lati dei vinili (`A1`, `B2`) `track_no` resta `None` e l'ordine lo dà il Task 13. `disc_subtitle` da `TSST` / `DISCSUBTITLE` / `----:com.apple.iTunes:DISCSUBTITLE`. Nomi per l'ordinamento da `TSOT`/`TSOP`/`TSOA`/`TSO2` (ID3), `TITLESORT`/`ARTISTSORT`/`ALBUMSORT`/`ALBUMARTISTSORT` (Vorbis), `sonm`/`soar`/`soal`/`soaa` (MP4). Generi multipli separati su `;` e `\0` (non sulla virgola). `compilation` da `TCMP`/`cpil`/`COMPILATION` = `1`.
   - `armonika_testdata::fixture::tagged_file(dir: &Path, name: &str, format: AudioFormat, tags: &FixtureTags) -> PathBuf`: copia il modello di silenzio da `bench/templates/` e scrive i tag con l'API nativa di lofty (split/merge, regole del §7.2). `FixtureTags` ha gli stessi campi di `TagFacts` più `cover: Option<Vec<u8>>`; `AudioFormat` qui è quello già esistente in `armonika-testdata` (`big.rs`), così `armonika-testdata` non dipende da `armonika-core`. Le crate lo usano solo come `dev-dependency`. Usato dai test di scanner, ricerca e Subsonic.
 
-- [ ] **Step 1: Test che falliscono** in `tests/probe.rs`, ognuno su tutti i 7 formati (ciclo sui formati): `reads_basic_tags`, `reads_multi_valued_artists_and_mb_ids` (solo mp3, flac, ogg, opus, m4a: wav e aiff restano ID3 nel chunk e vanno provati, se lofty non li rilegge il test documenta il limite), `year_from_full_date`, `detects_embedded_cover`, `missing_tags_are_none`, `truncated_file_is_an_error_not_a_panic` (file troncato a metà), `extension_case_is_ignored` (`SONG.MP3`).
+- [ ] **Step 1: Test che falliscono** in `tests/probe.rs`, ognuno su tutti i 7 formati (ciclo sui formati): `reads_basic_tags`, `reads_multi_valued_artists_and_mb_ids` (solo mp3, flac, ogg, opus, m4a: wav e aiff restano ID3 nel chunk e vanno provati, se lofty non li rilegge il test documenta il limite), `partial_dates_parsed` (`"1975"`, `"1975-10"`, `"1975-10-31"`), `original_date_separate_from_release_date` (remaster: `DATE=2011`, `ORIGINALDATE=1975`), `vinyl_track_number_kept_as_text` (`"A1"`: testo `A1`, numero `None`; `"3/12"`: testo `3`, numero 3, totale 12), `reads_sort_tags`, `reads_disc_subtitle`, `detects_embedded_cover`, `missing_tags_are_none`, `truncated_file_is_an_error_not_a_panic` (file troncato a metà), `extension_case_is_ignored` (`SONG.MP3`).
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare** `probe.rs` e `fixture.rs`.
 - [ ] **Step 4:** test verdi su Linux; sui tre sistemi in CI con la PR.
@@ -343,10 +381,10 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
 
 **Interfaces:**
 - Produces:
-  - `split_credit(credit: &str, artists_tag: &[String], mbids: &[String]) -> Vec<CreditArtist>`, con `CreditArtist { name: String, mbid: Option<String> }`. Regole del §8.1 nell'ordine: (1) se `mbids` non è vuoto e `artists_tag` ha la stessa lunghezza, coppie nome+mbid; se `mbids` ha un solo valore, l'accredito intero con quel mbid; con lunghezze diverse e più di un mbid, si ignorano gli mbid; (2) se `artists_tag` non è vuoto, un artista per valore; (3) altrimenti divisione solo su `feat.`, `ft.`, `featuring` (parole intere, senza distinguere maiuscole, anche tra parentesi) e su `;`. Mai su `&`, `and`, `e`, `,`, `/`, `x`.
-  - `resolve_artists(tx: &Transaction, library: LibraryId, list: &[CreditArtist]) -> Result<Vec<ArtistId>>`: con mbid, cerca o crea l'artista per `mbid` (aggiorna il nome visualizzato se cambiato). Senza mbid: se tra gli artisti con mbid collegati a tracce o album della stessa libreria ce n'è **esattamente uno** con lo stesso `norm_name`, si usa quello (§8.7 punto 7); altrimenti si cerca o crea l'artista senza mbid con quel `norm_name`.
+  - `split_credit(credit: &str, artists_tag: &[String], mbids: &[String]) -> Vec<CreditArtist>`, con `CreditArtist { credited_name: String, join_phrase: String, mbid: Option<String> }`, come le righe di `artist_credit_name` di MusicBrainz: `credited_name` è il nome come è scritto in questo accredito, `join_phrase` il testo che lo segue nell'accredito (`" feat. "`, `"; "`; vuoto per l'ultimo). Se i nomi vengono dal tag `ARTISTS`, `join_phrase` è il testo dell'accredito tra un nome e il successivo quando entrambi si trovano in ordine nell'accredito (confronto senza maiuscole), altrimenti vuoto. Concatenare `credited_name + join_phrase` di tutte le voci ridà l'accredito, quando i nomi vengono dal testo. Regole del §8.1 nell'ordine: (1) se `mbids` non è vuoto e `artists_tag` ha la stessa lunghezza, coppie nome+mbid; se `mbids` ha un solo valore, l'accredito intero con quel mbid; con lunghezze diverse e più di un mbid, si ignorano gli mbid; (2) se `artists_tag` non è vuoto, un artista per valore; (3) altrimenti divisione solo su `feat.`, `ft.`, `featuring` (parole intere, senza distinguere maiuscole, anche tra parentesi) e su `;`. Mai su `&`, `and`, `e`, `,`, `/`, `x`.
+  - `resolve_artists(tx: &Transaction, library: LibraryId, list: &[CreditArtist], sort: Option<&str>) -> Result<Vec<ArtistId>>`: il chiamante salva poi in `track_artists` / `album_artists` artista, `credited_name` e `join_phrase` per posizione. `sort` (tag `ARTISTSORT` o `ALBUMARTISTSORT`) si salva in `artists.sort_name` solo se l'accredito ha un solo artista; ogni modifica di un artista aggiorna `updated_at`. Con mbid, cerca o crea l'artista per `mbid` (aggiorna il nome visualizzato se cambiato). Senza mbid: se tra gli artisti con mbid collegati a tracce o album della stessa libreria ce n'è **esattamente uno** con lo stesso `norm_name`, si usa quello (§8.7 punto 7); altrimenti si cerca o crea l'artista senza mbid con quel `norm_name`.
 
-- [ ] **Step 1: Test che falliscono:** `ampersand_is_never_split` ("Simon & Garfunkel"), `comma_is_never_split` ("Earth, Wind & Fire"), `feat_is_split` ("Queen feat. David Bowie", "A (ft. B)", "A Featuring B"), `semicolon_is_split`, `artists_tag_wins_over_text`, `mbids_pair_with_artists_tag`, `single_mbid_applies_to_whole_credit`, `name_only_joins_unique_mbid_artist_in_library`, `name_only_stays_separate_with_homonyms` (due artisti con mbid diversi e lo stesso nome), `mbid_artist_in_other_library_does_not_capture_name_only`, `same_name_different_case_and_accents_is_one_artist` ("Beyoncé" e "beyonce").
+- [ ] **Step 1: Test che falliscono:** `ampersand_is_never_split` ("Simon & Garfunkel"), `comma_is_never_split` ("Earth, Wind & Fire"), `feat_is_split` ("Queen feat. David Bowie", "A (ft. B)", "A Featuring B"), `semicolon_is_split`, `artists_tag_wins_over_text`, `mbids_pair_with_artists_tag`, `single_mbid_applies_to_whole_credit`, `name_only_joins_unique_mbid_artist_in_library`, `name_only_stays_separate_with_homonyms` (due artisti con mbid diversi e lo stesso nome), `mbid_artist_in_other_library_does_not_capture_name_only`, `same_name_different_case_and_accents_is_one_artist` ("Beyoncé" e "beyonce": un artista, ma ogni traccia conserva il proprio `credited_name`), `join_phrases_rebuild_credit` ("A feat. B; C"), `join_phrase_from_artists_tag` (ARTISTS = [A, B], accredito "A & B": `join_phrase` di A è `" & "`), `sort_name_only_for_single_artist_credit`.
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare.**
 - [ ] **Step 4:** test verdi.
@@ -367,7 +405,7 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
   - Algoritmo (`reconcile.rs`):
     1. Verifica della radice; se fallisce, `RootUnavailable` e nessuna scrittura.
     2. Visita con `walkdir` (`follow_links(true)`; i cicli sono errori della singola voce, registrati e saltati), esclusa la cartella `.armonika` alla radice, solo estensioni accettate. Per ogni file: `stat` (dimensione, mtime in ms).
-    3. Confronto con le tracce `present` della libreria per `rel_path` (mappa caricata all'inizio). Stessa dimensione e mtime: invariato, nessuna lettura. Diversi: si rilegge (`read_file`), si aggiornano le colonne, `hash_state='pending'`, `content_hash=NULL`.
+    3. Confronto con le tracce `present` della libreria per `rel_path` (mappa caricata all'inizio). Stessa dimensione, stesso mtime e `tag_schema == TAG_SCHEMA_VERSION`: invariato, nessuna lettura. Stessa dimensione e mtime ma `tag_schema` vecchio: si rileggono solo i tag (l'impronta del contenuto resta valida, perché il file non è cambiato). Diversi: si rilegge (`read_file`), si aggiornano le colonne, `hash_state='pending'`, `content_hash=NULL`.
     4. Percorso sconosciuto, in quest'ordine:
        a. **solo maiuscole cambiate** (Review Focus 3): se una traccia `present` della libreria ha lo stesso percorso confrontato senza maiuscole, stessa dimensione e stesso mtime, si aggiorna solo il suo `rel_path`, senza leggere il file;
        b. **file ricomparso**: se una traccia `missing` ha esattamente lo stesso `rel_path`, torna `present` (si rilegge il file solo se dimensione o mtime sono cambiati);
@@ -378,7 +416,7 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
     7. A fine visita, le tracce `present` il cui percorso non è stato visto diventano `missing` con `missing_since`; si emette `LibraryChange` con `tracks_hidden`. Il pre-filtro del passo 4c vede quindi solo le tracce già mancanti da una scansione precedente o diventate mancanti in questa: per non perdere gli spostamenti avvenuti tra due scansioni, i file con percorso sconosciuto che non trovano candidati al passo 4c si rimettono in una lista e si riprovano dopo il passo 7, prima di creare tracce nuove.
   - `ScanReport` contiene anche `files_read` (quante volte è stata chiamata `read_file`), che il banco del Task 23 usa per verificare le scansioni incrementali. A fine scansione `serve` registra il report nei log come riga `scan finished` con i campi del report.
 
-- [ ] **Step 1: Test che falliscono** (librerie create in `tempdir` con `fixture::tagged_file`): `first_scan_creates_tracks`, `rescan_without_changes_reads_nothing` (`unchanged == n`, `files_read == 0`), `move_between_scans_is_relinked` (spostamento fatto a server fermo: alla scansione successiva il percorso vecchio e quello nuovo si vedono nella stessa visita), `changed_tags_update_same_track` (stesso `TrackId`), `deleted_file_makes_track_missing_and_keeps_annotations` (preferito inserito prima resta), `reappeared_file_restores_same_track`, `moved_file_is_relinked_by_prefilter` (spostamento con `fs::rename` in un'altra cartella: stesso `TrackId`, `prev_content_hash` copiato), `two_missing_candidates_do_not_relink` (due copie identiche spostate: nascono tracce nuove), `case_only_rename_keeps_track`, `unavailable_root_aborts_without_marking_missing`, `unreadable_file_is_skipped_and_retried`, `dot_armonika_is_ignored`, `non_audio_files_are_ignored`, `changes_are_emitted_in_batches` (batch 2, 5 file: almeno 3 eventi), `symlink_loop_does_not_hang` (`#[cfg(unix)]`).
+- [ ] **Step 1: Test che falliscono** (librerie create in `tempdir` con `fixture::tagged_file`): `first_scan_creates_tracks`, `rescan_without_changes_reads_nothing` (`unchanged == n`, `files_read == 0`), `tag_schema_bump_rereads_once` (tracce con `tag_schema = 0`: la prima scansione le rilegge e conserva `content_hash`, la seconda no), `move_between_scans_is_relinked` (spostamento fatto a server fermo: alla scansione successiva il percorso vecchio e quello nuovo si vedono nella stessa visita), `changed_tags_update_same_track` (stesso `TrackId`), `deleted_file_makes_track_missing_and_keeps_annotations` (preferito inserito prima resta), `reappeared_file_restores_same_track`, `moved_file_is_relinked_by_prefilter` (spostamento con `fs::rename` in un'altra cartella: stesso `TrackId`, `prev_content_hash` copiato), `two_missing_candidates_do_not_relink` (due copie identiche spostate: nascono tracce nuove), `case_only_rename_keeps_track`, `unavailable_root_aborts_without_marking_missing`, `unreadable_file_is_skipped_and_retried`, `dot_armonika_is_ignored`, `non_audio_files_are_ignored`, `changes_are_emitted_in_batches` (batch 2, 5 file: almeno 3 eventi), `symlink_loop_does_not_hang` (`#[cfg(unix)]`).
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare.**
 - [ ] **Step 4:** test verdi.
@@ -399,11 +437,12 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
   - **Regola della cartella** (§8.7 punto 10), applicata in `assign_album` prima della ricerca per chiave: una traccia senza `release_mbid` nella stessa cartella di tracce con lo stesso titolo e accredito dell'album che hanno un `release_mbid` (uno solo) entra in quell'album.
   - `reconcile_albums(tx, library) -> Result<Vec<LibraryAlbumId>>`, chiamata a fine scansione: preserva gli identificativi quando gli album si dividono o si uniscono per modifiche fatte da fuori (§8.1). Algoritmo:
     1. Per ogni album della libreria con tracce si calcola la chiave che le sue tracce hanno ora; un album le cui tracce hanno chiavi diverse si divide: la parte con più tracce tiene l'identificativo (a parità, la chiave minore in ordine lessicografico), le altre parti vanno all'album esistente con la loro chiave, o a un album nuovo.
-    2. Se più album hanno la stessa chiave (unione), resta quello con più tracce (a parità, il più vecchio per `created_at`); le tracce degli altri passano a lui e le loro `album_annotations` si fondono (preferito se lo era in almeno uno, con la data più vecchia; valutazione più alta), poi gli album rimasti vuoti si cancellano solo se non hanno annotazioni, altrimenti restano senza tracce (invisibili) per non perdere dati personali.
-    3. Restituisce gli album toccati, per la ricerca.
+    2. Se più album hanno la stessa chiave (unione), resta quello con più tracce (a parità, il più vecchio per `created_at`); le tracce degli altri passano a lui e le loro `album_annotations` si fondono (preferito se lo era in almeno uno, con la data più vecchia; valutazione più alta), poi per ogni album assorbito si scrive `add_redirect(vecchio public_id, public_id tenuto)` e l'album assorbito si cancella (le sue annotazioni sono già state fuse). Gli album rimasti senza tracce per altri motivi (tutte mancanti) restano, invisibili, con i loro dati personali.
+    3. Campi dell'album calcolati dalle sue tracce `present`: data e data originale = il valore più frequente tra le tracce (a parità, il più vecchio); `sort_title` dal tag `ALBUMSORT` più frequente. Ogni modifica dell'album aggiorna `updated_at`.
+    4. Restituisce gli album toccati, per la ricerca.
   - Visibilità: un album della libreria è visibile se ha almeno una traccia `present`.
 
-- [ ] **Step 1: Test che falliscono:** `same_release_mbid_is_one_album`, `title_and_credit_group_without_mbid`, `multi_disc_folders_are_one_album` (`Disc 1/`, `Disc 2/`), `compilation_flag_gives_various_artists`, `mixed_artists_in_folder_give_various_artists`, `no_album_title_goes_to_artist_singles`, `folder_rule_joins_track_without_mbid`, `split_keeps_id_on_larger_part` (album da 8 tracce, 3 ritaggate con altro titolo: le 5 tengono l'id e il preferito), `merge_keeps_id_of_larger_and_moves_stars`, `empty_album_with_star_is_kept_hidden`.
+- [ ] **Step 1: Test che falliscono:** `same_release_mbid_is_one_album`, `title_and_credit_group_without_mbid`, `multi_disc_folders_are_one_album` (`Disc 1/`, `Disc 2/`), `compilation_flag_gives_various_artists`, `mixed_artists_in_folder_give_various_artists`, `no_album_title_goes_to_artist_singles`, `folder_rule_joins_track_without_mbid`, `split_keeps_id_on_larger_part` (album da 8 tracce, 3 ritaggate con altro titolo: le 5 tengono l'id e il preferito), `merge_keeps_id_of_larger_and_moves_stars`, `merged_album_old_id_still_resolves` (`resolve_album` con l'id assorbito dà l'album tenuto), `empty_album_with_star_is_kept_hidden`, `album_original_date_from_tracks` (remaster 2011 di un album del 1975: data 2011, data originale 1975).
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare** e collegare allo scanner (Task 7 passo 5 per `assign_album`, fine scansione per `reconcile_albums`).
 - [ ] **Step 4:** test verdi.
@@ -420,11 +459,11 @@ Le tracce `deleted` non nascono in questa fase (il cestino è della fase 2), ma 
   - `content_hash(path: &Path) -> Result<[u8; 32], HashError>`: Symphonia (con `symphonia` per tutti i formati accettati; per Ogg/Opus basta il demuxer Ogg, nessuna decodifica), prima traccia audio, ogni pacchetto da `next_packet()` entra in BLAKE3 preceduto dalla sua lunghezza in 4 byte little-endian; hash intero di 32 byte (spike 5, variante A).
   - `Hasher::run(db: Db, stop: CancellationToken, changes: impl Fn(LibraryChange))`: un thread, bassa priorità; prende a lotti di 50 le tracce `present` con `hash_state='pending'`, calcola l'impronta, poi per ogni traccia:
     1. se `prev_content_hash` non è NULL (ricollegata dal pre-filtro): se coincide, si azzera `prev_content_hash`; se **non** coincide, il collegamento si annulla: la traccia torna `missing` con `rel_path = prev_rel_path` e `content_hash = prev_content_hash`, e per il file si crea una traccia nuova (stesse colonne del file e dei tag, nuovo `TrackId`, impronta appena calcolata, `hash_state='done'`). In entrambi i casi `prev_*` tornano NULL. Se la traccia non aveva un'impronta prima del ricollegamento, non c'è nulla da confrontare e il collegamento resta;
-    2. altrimenti, se esattamente una traccia `missing` della stessa libreria ha la stessa impronta (con più candidate si preferisce lo stesso nome di file; se resta ambiguo, niente), la traccia mancante prende il file (percorso, colonne del file e dei tag, `state='present'`) e la traccia attuale si fonde in essa: annotazioni fuse con le regole del §8.7 punto 6 (preferito se lo era almeno una, valutazione più alta, ascolti sommati, `last_played_at` massimo), cronologia, voci di playlist e coda di riproduzione puntano alla traccia tenuta, poi la traccia attuale si cancella. La traccia tenuta è quella mancante, perché ha l'identificativo più vecchio e i dati personali. Ogni ricollegamento o annullamento emette `LibraryChange` (album ricalcolati con `assign_album`, indice aggiornato);
+    2. altrimenti, se esattamente una traccia `missing` della stessa libreria ha la stessa impronta (con più candidate si preferisce lo stesso nome di file; se resta ambiguo, niente), la traccia mancante prende il file (percorso, colonne del file e dei tag, `state='present'`) e la traccia attuale si fonde in essa: annotazioni fuse con le regole del §8.7 punto 6 (preferito se lo era almeno una, valutazione più alta, ascolti sommati, `last_played_at` massimo), cronologia, voci di playlist e coda di riproduzione puntano alla traccia tenuta, poi si scrive `add_redirect(public_id della traccia attuale, public_id della traccia tenuta)` (un'app che ha già salvato l'identificativo nuovo, per esempio in un download offline, continua a trovarla) e la traccia attuale si cancella. La traccia tenuta è quella mancante, perché ha l'identificativo più vecchio e i dati personali. Ogni ricollegamento o annullamento emette `LibraryChange` (album ricalcolati con `assign_album`, indice aggiornato);
     3. errori di lettura: `hash_state='failed'`, nessun ricollegamento; un file con impronta fallita si riprova solo quando cambia (dimensione o mtime).
   - Il thread si mette in pausa mentre una scansione della stessa libreria è in corso (segnale dal controller, Task 10).
 
-- [ ] **Step 1: Test che falliscono:** media: `hash_ignores_tag_changes` (stesso file, titolo cambiato con fixture: impronta uguale; tutti i formati tranne wav e aiff, per cui si documenta l'esito), `hash_differs_for_different_audio` (due modelli diversi), `hash_ignores_cover_change`. Hasher: `prefilter_link_confirmed_by_hash`, `prefilter_link_reverted_on_mismatch` (si simula sostituendo il contenuto audio con uno della stessa dimensione e mtime forzato con `filetime`), `moved_and_retagged_file_relinked_by_hash` (spostato e ritaggato: il pre-filtro non lo trova, l'hasher sì; preferiti e playlist della traccia vecchia restano sul `TrackId` vecchio), `ambiguous_hash_does_not_relink`, `failed_hash_is_not_retried_until_file_changes`.
+- [ ] **Step 1: Test che falliscono:** media: `hash_ignores_tag_changes` (stesso file, titolo cambiato con fixture: impronta uguale; tutti i formati tranne wav e aiff, per cui si documenta l'esito), `hash_differs_for_different_audio` (due modelli diversi), `hash_ignores_cover_change`. Hasher: `prefilter_link_confirmed_by_hash`, `prefilter_link_reverted_on_mismatch` (si simula sostituendo il contenuto audio con uno della stessa dimensione e mtime forzato con `filetime`), `moved_and_retagged_file_relinked_by_hash` (spostato e ritaggato: il pre-filtro non lo trova, l'hasher sì; preferiti e playlist della traccia vecchia restano sul `TrackId` vecchio), `ambiguous_hash_does_not_relink`, `merged_track_old_id_still_resolves`, `failed_hash_is_not_retried_until_file_changes`.
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare.**
 - [ ] **Step 4:** test verdi.
@@ -497,7 +536,7 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
   - Autenticazione (`auth.rs`), estrattore `Caller(Access)`: `u` + `t` + `s` (token = md5(password Subsonic + sale), confronto in tempo costante); `u` + `p` in chiaro o `enc:<hex>`; `apiKey` (estensione `apiKeyAuthentication`). Errori: 10 parametro mancante, 40 credenziali errate, 43 `apiKey` insieme a `u`/`p`/`t`, 44 API key non valida, 50 non autorizzato. Ritardo fisso di 500 ms sulle risposte 40 e 44.
   - Risposte (`response.rs`): gli handler restituiscono `Payload(&'static str /* nome del nodo, es. "album" */, serde_json::Value)`; `f=json` produce `{"subsonic-response": {status, version, type, serverVersion, openSubsonic, <nodo>: ...}}`; `f=xml` (default) converte il `Value` con regole fisse: scalari come attributi, oggetti come elementi figli, array come elementi ripetuti con il nome della chiave, chiave `value` come testo dell'elemento; namespace `http://subsonic.org/restapi`. `f=jsonp` non supportato (errore 0).
   - Ogni risposta `/rest` ha l'intestazione `Server-Timing: app;dur=<ms>` (tempo lato server, usato dal banco del Task 23).
-  - Visibilità: ogni handler usa `Access::visible(musicFolderId)`; un id di una traccia, album o artista non visibile risponde **70 not found**, mai 50 (non si rivela l'esistenza).
+  - Visibilità: ogni handler usa `Access::visible(musicFolderId)`; un id di una traccia, album o artista non visibile risponde **70 not found**, mai 50 (non si rivela l'esistenza). Ogni id ricevuto passa da `resolve_*` (Task 2), quindi un id assorbito in un'unione porta all'entità tenuta; le risposte riportano sempre l'id tenuto.
   - Endpoint: `ping`, `getLicense` (`valid: true`), `getOpenSubsonicExtensions` (`formPost` v1, `apiKeyAuthentication` v1), `getMusicFolders` (solo le librerie visibili), `getUser` (solo se stesso, o qualsiasi per un admin; `streamRole`, `downloadRole = can_download`, `adminRole`, `scrobblingEnabled`, `folder` = librerie visibili), `getScanStatus` (`scanning`, `count` = file visti), `startScan` (solo chi ha `manage` su almeno una libreria: avvia la scansione delle librerie che gestisce).
 
 - [ ] **Step 1: Test che falliscono** (con un helper `common::app()` che crea database, utenti `admin` e `ann` (accesso `listen` alla libreria A) e una libreria con 3 tracce di fixture, e chiama il router con `oneshot`): `token_auth_ok`, `plain_and_enc_password_ok`, `api_key_ok`, `wrong_password_is_40`, `api_key_with_user_is_43`, `missing_user_is_10`, `json_and_xml_envelopes` (stesso contenuto, XML valido con il namespace), `view_suffix_and_post_form_work`, `music_folders_only_visible`, `get_user_reports_download_role`, `start_scan_requires_manage`, `unknown_method_is_error_0`.
@@ -514,12 +553,14 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 
 **Interfaces:**
 - Produces:
-  - `tracks.rs` (core): query di sola lettura che applicano sempre `state='present'` e il filtro delle librerie: `track(conn, &[LibraryId], &TrackId) -> Result<Option<TrackView>>`, `album(conn, libs, &LibraryAlbumId) -> Result<Option<(AlbumView, Vec<TrackView>)>>` (tracce in ordine disco, numero, titolo), `artist(conn, libs, &ArtistId) -> Result<Option<(ArtistView, Vec<AlbumView>)>>` (album di cui è artista dell'album), `artists(conn, libs) -> Vec<ArtistView>`, `album_list(conn, libs, AlbumListKind, size, offset, user: &UserId) -> Vec<AlbumView>`, `random_tracks(conn, libs, size, genre, from_year, to_year)`, `tracks_by_genre`, `genres(conn, libs) -> Vec<(String, song_count, album_count)>`, `all_tracks_page(conn, libs, offset, limit)` (ordine per `id`, per il Task 14). `TrackView`, `AlbumView`, `ArtistView` contengono i campi Subsonic più le annotazioni dell'utente (`starred`, `userRating`, `playCount`, `played`).
+  - `tracks.rs` (core): query di sola lettura che applicano sempre `state='present'` e il filtro delle librerie: `track(conn, &[LibraryId], &TrackId) -> Result<Option<TrackView>>`, `album(conn, libs, &LibraryAlbumId) -> Result<Option<(AlbumView, Vec<TrackView>)>>` (tracce in ordine disco, poi `track_no`; se manca `track_no`, ordine naturale di `track_number_text` con lettere e numeri separati, così `A1, A2, A10, B1`; poi titolo), `artist(conn, libs, &ArtistId) -> Result<Option<(ArtistView, Vec<AlbumView>)>>` (album di cui è artista dell'album), `artists(conn, libs) -> Vec<ArtistView>`, `album_list(conn, libs, AlbumListKind, size, offset, user: &UserId) -> Vec<AlbumView>`, `random_tracks(conn, libs, size, genre, from_year, to_year)`, `tracks_by_genre`, `genres(conn, libs) -> Vec<(String, song_count, album_count)>`, `all_tracks_page(conn, libs, offset, limit)` (ordine per `id`, per il Task 14). `TrackView`, `AlbumView`, `ArtistView` contengono i campi Subsonic più le annotazioni dell'utente (`starred`, `userRating`, `playCount`, `played`).
   - `AlbumListKind { Random, Newest, Frequent, Recent, Starred, AlphabeticalByName, AlphabeticalByArtist, ByYear { from, to }, ByGenre(String), Highest }`; `Frequent`, `Recent`, `Starred`, `Highest` usano i dati **dell'utente che chiama**.
-  - Endpoint: `getArtists` (indice per iniziale con `ignoredArticles` dalla configurazione), `getArtist`, `getAlbum`, `getSong`, `getGenres`, `getAlbumList2`, `getAlbumList` (stessi dati, nodo `albumList`), `getRandomSongs`, `getSongsByGenre`, `getIndexes` e `getMusicDirectory` (vista a cartelle simulata: artisti, poi album della libreria, poi tracce, come Navidrome), `getArtistInfo2` e `getAlbumInfo2` (risposta vuota valida, nessun servizio esterno in questa fase), `getTopSongs` e `getSimilarSongs2` (liste vuote).
-  - Campi di una traccia (`child`): `id`, `parent` (album), `title`, `album`, `artist`, `track`, `discNumber`, `year`, `genre`, `coverArt` (= id dell'album se l'album ha una copertina, altrimenti id della traccia), `size`, `contentType`, `suffix`, `duration` (s), `bitRate`, `samplingRate`, `channelCount`, `bitDepth`, `path` (`rel_path`), `isDir: false`, `type: "music"`, `albumId`, `artistId` (primo artista), `artists` e `albumArtists` (OpenSubsonic, liste `{id, name}`), `musicBrainzId` (registrazione), `created` (`added_at`), `starred`, `userRating`, `playCount`, `played`.
+  - Ordinamento per nome di artisti, album e tracce: `sort_name` / `sort_title` se presenti, altrimenti `fold_sort` con gli articoli della configurazione. `AlphabeticalByName` e `ByYear` usano la data **originale** se c'è, altrimenti quella dell'edizione.
+  - Endpoint: `getArtists` (indice per iniziale con `ignoredArticles` dalla configurazione; `ifModifiedSince` e `lastModified` di `getIndexes` dal massimo `updated_at` di tracce, album e artisti visibili), `getArtist`, `getAlbum`, `getSong`, `getGenres`, `getAlbumList2`, `getAlbumList` (stessi dati, nodo `albumList`), `getRandomSongs`, `getSongsByGenre`, `getIndexes` e `getMusicDirectory` (vista a cartelle simulata: artisti, poi album della libreria, poi tracce, come Navidrome), `getArtistInfo2` e `getAlbumInfo2` (risposta vuota valida, nessun servizio esterno in questa fase), `getTopSongs` e `getSimilarSongs2` (liste vuote).
+  - Campi di una traccia (`child`): `id`, `parent` (album), `title`, `album`, `artist`, `track` (`track_no`, assente se è `None`), `discNumber`, `year` (anno dell'edizione), `genre`, `sortName`, `displayArtist` (accredito come scritto nel file), `coverArt` (= id dell'album se l'album ha una copertina, altrimenti id della traccia), `size`, `contentType`, `suffix`, `duration` (s), `bitRate`, `samplingRate`, `channelCount`, `bitDepth`, `path` (`rel_path`), `isDir: false`, `type: "music"`, `albumId`, `artistId` (primo artista), `artists` e `albumArtists` (OpenSubsonic, liste `{id, name}`), `musicBrainzId` (registrazione), `created` (`added_at`), `starred`, `userRating`, `playCount`, `played`. Gli elementi di `artists` e `albumArtists` usano il nome dell'artista; l'accredito com'era scritto resta in `artist` e `displayArtist`.
+  - Campi aggiuntivi di un album (OpenSubsonic): `releaseDate` e `originalReleaseDate` come `{year, month, day}` con i campi assenti omessi, `year` = anno originale se c'è, altrimenti dell'edizione (così un remaster si ordina con l'album originale), `sortName`, `discTitles` (`[{disc, title}]` da `disc_subtitle`), `isCompilation`, `musicBrainzId` (edizione).
 
-- [ ] **Step 1: Test che falliscono:** `artists_indexed_ignoring_articles` ("The Beatles" sotto B), `album_tracks_in_disc_track_order`, `missing_track_not_listed_and_get_song_is_70`, `other_library_album_is_70`, `music_folder_filter_applies`, `album_list_starred_is_per_user` (preferito di `admin` non compare per `ann`), `album_list_paging_is_stable`, `random_songs_respects_size`, `directory_browsing_walks_artist_album_tracks`, `multi_artist_track_appears_under_each_artist` (§ Glossario, accredito "A feat. B").
+- [ ] **Step 1: Test che falliscono:** `artists_indexed_ignoring_articles` ("The Beatles" sotto B), `album_tracks_in_disc_track_order`, `missing_track_not_listed_and_get_song_is_70`, `other_library_album_is_70`, `music_folder_filter_applies`, `album_list_starred_is_per_user` (preferito di `admin` non compare per `ann`), `album_list_paging_is_stable`, `random_songs_respects_size`, `directory_browsing_walks_artist_album_tracks`, `multi_artist_track_appears_under_each_artist` (§ Glossario, accredito "A feat. B"), `vinyl_sides_in_natural_order` (A1, A2, A10, B1), `sort_tag_orders_artist` ("David Bowie" con `ARTISTSORT` "Bowie, David" sotto B), `remaster_sorted_by_original_year`, `album_exposes_release_and_original_dates`, `merged_album_old_id_returns_kept_album`, `indexes_if_modified_since_returns_empty_when_unchanged`.
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare.**
 - [ ] **Step 4:** test verdi.
@@ -757,5 +798,6 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 - Impronta Chromaprint in background, edit list degli M4A, corpus Opus: fase 2 (decisione 3).
 - Riconoscimento dell'atomo `keys` negli M4A, scrittura dei tag, livelli di scrittura oltre "Sola lettura", cestino, `inbox`, coda, limiti di spazio: fase 2 (la colonna `write_level` esiste già ma vale sempre `read_only`).
 - Testi delle canzoni (`getLyrics`, estensione `songLyrics`), informazioni su artisti e album da servizi esterni: non previsti dal design per la fase 1.
+- **Nota per la fase 2:** MusicBrainz unisce entità e reindirizza i vecchi MBID, quindi file taggati in anni diversi possono avere MBID diversi per lo stesso artista o la stessa edizione. Quando il riconoscimento lo scopre, servono l'unione di due artisti (con le regole dei dati personali del §8.7 punto 6 e `id_redirects`) e l'aggiornamento di `artists.mbid`, che oggi è `UNIQUE`.
 - Binari su GitHub Releases: con il rilascio pubblico (fine fase 2).
 - Esportazione dei dati personali (§8.1): fase 2, dall'interfaccia; in fase 1 basta la copia della cartella `data` (scritto in `docs/configuration.md`).
