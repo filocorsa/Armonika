@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 /// Variables with the `ARMONIKA_` prefix that other code reads directly.
 /// They are not configuration keys and must not reach the strict parser.
+/// The [`TOP_LEVEL_KEYS`] filter already excludes them; this list is defense
+/// in depth in case a future section shares a name with one of them.
 const RESERVED_ENV: &[&str] = &["admin_user", "admin_password", "secret_key", "config"];
 
 /// Top-level keys of [`Config`]. Only `ARMONIKA_*` variables whose first
@@ -185,6 +187,7 @@ impl Config {
             figment = figment.merge(Toml::file(file));
         }
 
+        warn_ignored_env();
         let env = Env::prefixed("ARMONIKA_")
             .ignore(RESERVED_ENV)
             .split("__")
@@ -195,5 +198,25 @@ impl Config {
         figment = figment.merge(env);
 
         figment.extract().context("invalid configuration")
+    }
+}
+
+/// Logs the name (never the value) of each `ARMONIKA_*` variable that is
+/// neither configuration nor reserved, so a typo does not go unnoticed.
+fn warn_ignored_env() {
+    for (name, _) in std::env::vars_os() {
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix("ARMONIKA_") else {
+            continue;
+        };
+        let top = rest.split("__").next().unwrap_or_default();
+        let known = TOP_LEVEL_KEYS.iter().any(|k| k.eq_ignore_ascii_case(top))
+            || RESERVED_ENV.iter().any(|k| k.eq_ignore_ascii_case(rest));
+        if !known {
+            tracing::warn!(
+                variable = name,
+                "ignoring environment variable: not a configuration key"
+            );
+        }
     }
 }

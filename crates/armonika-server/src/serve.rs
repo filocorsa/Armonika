@@ -32,9 +32,15 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolves on Ctrl+C or (unix) SIGTERM. A handler that cannot be installed
+/// is logged and never resolves, so the server keeps running instead of
+/// shutting down at once.
 async fn shutdown_signal() {
     let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::error!(%err, "cannot listen for Ctrl+C; stop the process another way");
+            std::future::pending::<()>().await;
+        }
     };
     #[cfg(unix)]
     let term = async {
@@ -42,7 +48,10 @@ async fn shutdown_signal() {
             Ok(mut s) => {
                 s.recv().await;
             }
-            Err(_) => std::future::pending::<()>().await,
+            Err(err) => {
+                tracing::warn!(%err, "cannot listen for SIGTERM");
+                std::future::pending::<()>().await
+            }
         }
     };
     #[cfg(not(unix))]
@@ -51,4 +60,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = term => {},
     }
+    tracing::info!("shutdown signal received");
 }
