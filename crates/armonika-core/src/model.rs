@@ -1,7 +1,11 @@
-//! What a file says about itself: audio properties and tags, as read by the scanner.
+//! What a file says about itself (audio properties and tags, as read by the scanner)
+//! and the events the scanner emits about a library.
 //!
-//! These types carry no database identity. `armonika-media` fills them from a file and
-//! the scanner copies them into the database.
+//! [`FileFacts`] and [`TagFacts`] carry no database identity: `armonika-media` fills
+//! them from a file and the scanner copies them into the database. [`LibraryChange`]
+//! names the tracks, albums and artists a scan wrote, by public identifier.
+
+use crate::ids::{ArtistId, LibraryAlbumId, LibraryId, TrackId};
 
 /// Audio formats accepted by the scanner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,6 +100,40 @@ pub struct FileFacts {
     pub channels: Option<u8>,
     pub bit_depth: Option<u8>,
     pub tags: TagFacts,
+}
+
+/// What one committed batch of a scan changed in a library, for the clients that
+/// keep a view of it (search index, live updates). Every list is without duplicates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryChange {
+    pub library: LibraryId,
+    /// Tracks created, or whose file, path, tags or state changed and that are present.
+    pub tracks_upserted: Vec<TrackId>,
+    /// Tracks that became missing: they are no longer shown but keep their data.
+    pub tracks_hidden: Vec<TrackId>,
+    pub albums_touched: Vec<LibraryAlbumId>,
+    pub artists_touched: Vec<ArtistId>,
+}
+
+impl LibraryChange {
+    /// An event for `library` that changes nothing yet.
+    pub fn new(library: LibraryId) -> LibraryChange {
+        LibraryChange {
+            library,
+            tracks_upserted: Vec::new(),
+            tracks_hidden: Vec::new(),
+            albums_touched: Vec::new(),
+            artists_touched: Vec::new(),
+        }
+    }
+
+    /// Whether the event names nothing.
+    pub fn is_empty(&self) -> bool {
+        self.tracks_upserted.is_empty()
+            && self.tracks_hidden.is_empty()
+            && self.albums_touched.is_empty()
+            && self.artists_touched.is_empty()
+    }
 }
 
 #[cfg(test)]

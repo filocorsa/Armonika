@@ -10,6 +10,7 @@ pub mod model;
 pub mod paths;
 pub mod secret;
 pub mod text;
+pub mod track_files;
 pub mod users;
 
 pub use error::{Error, Result};

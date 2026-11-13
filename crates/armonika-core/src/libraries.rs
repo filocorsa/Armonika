@@ -228,6 +228,14 @@ pub fn by_name(conn: &Connection, name: &str) -> Result<Option<Library>> {
         .optional()?)
 }
 
+/// The library `id`.
+pub fn get(conn: &Connection, id: LibraryId) -> Result<Option<Library>> {
+    Ok(conn
+        .prepare_cached(&format!("{LIBRARY_COLUMNS} WHERE id = ?1"))?
+        .query_row([id.0], library_from_row)
+        .optional()?)
+}
+
 /// Creates the configured libraries whose name does not exist yet, each reported by a
 /// [`SyncNote::Created`]. For a library that exists the database wins: a different configured path is not applied and gives a
 /// [`SyncNote::PathDiffers`]. A configured library that cannot be created (for example

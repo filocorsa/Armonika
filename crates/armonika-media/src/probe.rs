@@ -60,13 +60,7 @@ pub fn read_file(path: &Path) -> Result<FileFacts, ProbeError> {
         source,
     };
     let meta = fs::metadata(path).map_err(io_err)?;
-    let mtime_ms = meta
-        .modified()
-        .map_err(io_err)
-        .map(|t| match t.duration_since(UNIX_EPOCH) {
-            Ok(after) => i64::try_from(after.as_millis()).unwrap_or(i64::MAX),
-            Err(before) => -i64::try_from(before.duration().as_millis()).unwrap_or(i64::MAX),
-        })?;
+    let mtime_ms = mtime_ms(&meta).map_err(io_err)?;
 
     let tagged = Probe::open(path)
         .map_err(parse_err)?
@@ -94,6 +88,16 @@ pub fn read_file(path: &Path) -> Result<FileFacts, ProbeError> {
         channels: props.channels().filter(|c| *c > 0),
         bit_depth: props.bit_depth().filter(|b| *b > 0),
         tags: read_tags(&tagged),
+    })
+}
+
+/// The modification time of a file in milliseconds since the Unix epoch (negative
+/// before it), as stored in `FileFacts::mtime_ms`. The scanner compares it with the
+/// stored value to decide whether a file must be read again.
+pub fn mtime_ms(meta: &fs::Metadata) -> std::io::Result<i64> {
+    meta.modified().map(|t| match t.duration_since(UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_millis()).unwrap_or(i64::MAX),
+        Err(before) => -i64::try_from(before.duration().as_millis()).unwrap_or(i64::MAX),
     })
 }
 

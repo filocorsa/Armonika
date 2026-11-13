@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::db::now_ms;
 use crate::ids::{ArtistId, LibraryAlbumId, LibraryId, TrackId, resolve_album, resolve_track};
@@ -492,6 +492,18 @@ pub fn link_track_artists(
 ) -> Result<Vec<ArtistId>> {
     let key = resolve_track(tx, track)?.ok_or_else(|| Error::TrackNotFound(track.clone()))?;
     link(tx, &TRACK_LINKS, key, list, sort)
+}
+
+/// The artists linked to the track `track`, in credit order.
+pub fn track_artist_ids(conn: &Connection, track: &TrackId) -> Result<Vec<ArtistId>> {
+    let key = resolve_track(conn, track)?.ok_or_else(|| Error::TrackNotFound(track.clone()))?;
+    Ok(conn
+        .prepare_cached(
+            "SELECT a.public_id FROM track_artists l JOIN artists a ON a.id = l.artist_id
+             WHERE l.track_id = ?1 ORDER BY l.position",
+        )?
+        .query_map([key], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 /// Same as [`link_track_artists`] for the artists of a library album (`album_artists`).

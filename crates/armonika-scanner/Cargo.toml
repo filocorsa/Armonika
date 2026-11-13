@@ -1,0 +1,23 @@
+[package]
+name = "armonika-scanner"
+description = "Library scanner of the Armonika music server: links files to tracks with stable identity"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+armonika-core = { path = "../armonika-core" }
+armonika-media = { path = "../armonika-media" }
+rayon = "1.12.0"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+armonika-testdata = { path = "../../bench/testdata" }
+rusqlite = "0.41.1"
+tempfile = "3.27.0"
