@@ -95,13 +95,20 @@ impl Db {
 
     /// Runs `f` on the writer connection on the current thread. For the scanner and the CLI.
     pub fn write_blocking<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
-        // A panic inside an earlier closure poisons the mutex; any open transaction
-        // was rolled back when it was dropped, so the connection is still usable.
-        let mut conn = self
-            .inner
-            .writer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        // A panic inside an earlier closure poisons the mutex. A `Transaction` it held
+        // was rolled back when dropped, but one begun with SQL (or by a long batch that
+        // never reached its commit) is still open: roll it back, so the next writer
+        // does not commit half of someone else's work.
+        let mut conn = self.inner.writer.lock().unwrap_or_else(|poisoned| {
+            let conn = PoisonError::into_inner(poisoned);
+            if !conn.is_autocommit() {
+                // If even the rollback fails the connection is unusable anyway; the next
+                // statement reports the error.
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            self.inner.writer.clear_poison();
+            conn
+        });
         f(&mut conn)
     }
 }

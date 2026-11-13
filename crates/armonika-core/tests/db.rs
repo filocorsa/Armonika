@@ -445,3 +445,30 @@ fn negative_user_version_is_an_error() {
         "{err:?}"
     );
 }
+
+#[test]
+fn panic_inside_a_write_rolls_back_an_open_transaction() {
+    let (_dir, db) = open_temp();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.write_blocking(|c| -> armonika_core::Result<()> {
+            // A transaction begun with SQL is not rolled back by any drop guard.
+            c.execute_batch(
+                "BEGIN; INSERT INTO settings (key, value) VALUES ('half', 'written');",
+            )?;
+            panic!("closure fails in the middle of a batch");
+        })
+    }));
+    assert!(panicked.is_err());
+
+    let (autocommit, rows) = db
+        .write_blocking(|c| {
+            let rows: i64 = c.query_row("SELECT count(*) FROM settings", [], |r| r.get(0))?;
+            Ok((c.is_autocommit(), rows))
+        })
+        .unwrap();
+    assert!(
+        autocommit,
+        "the next writer must not inherit the transaction"
+    );
+    assert_eq!(rows, 0, "the half-written batch is rolled back");
+}
