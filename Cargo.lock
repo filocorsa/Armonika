@@ -117,6 +117,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "armonika-media"
+version = "0.0.0"
+dependencies = [
+ "armonika-core",
+ "armonika-testdata",
+ "lofty",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "armonika-server"
 version = "0.0.0"
 dependencies = [

@@ -5,6 +5,7 @@ pub mod db;
 mod error;
 pub mod ids;
 pub mod libraries;
+pub mod model;
 pub mod paths;
 pub mod secret;
 pub mod text;
