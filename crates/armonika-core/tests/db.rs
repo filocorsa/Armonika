@@ -52,8 +52,60 @@ fn open_applies_migrations_once() {
             Ok((version, tables))
         })
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     assert_eq!(tables, 1);
+}
+
+/// Two processes opening a new database at the same time must not both apply the
+/// migrations.
+#[test]
+fn concurrent_open_applies_migrations_once() {
+    for _ in 0..10 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("armonika.db");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Db::open(&path).map(drop)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+}
+
+#[test]
+fn migration_2_adds_artist_links() {
+    let (_dir, db) = open_temp();
+    db.read_blocking(|c| {
+        for table in ["track_artists", "album_artists"] {
+            let n: i64 = c.query_row(
+                "SELECT count(*) FROM pragma_table_info(?1) WHERE name = 'matched_by_name'",
+                [table],
+                |r| r.get(0),
+            )?;
+            assert_eq!(n, 1, "{table}");
+        }
+        let n: i64 = c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'artists_norm_mbid'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(n, 1);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
