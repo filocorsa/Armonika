@@ -78,6 +78,23 @@ pub enum Error {
     /// No library has this identifier.
     #[error("library not found: {0}")]
     LibraryNotFound(crate::ids::LibraryId),
+    /// No library has this name.
+    #[error("no library named {0:?}")]
+    LibraryNameNotFound(String),
+    /// A library name is empty, has leading or trailing spaces or control characters.
+    #[error("invalid library name {0:?}")]
+    InvalidLibraryName(String),
+    /// A library with this name already exists.
+    #[error("a library named {0:?} already exists")]
+    LibraryExists(String),
+    /// A directory cannot be the root of a library.
+    #[error("{} cannot be a library root: it {reason}", root.display())]
+    LibraryRoot {
+        /// The directory as given.
+        root: std::path::PathBuf,
+        /// Why it was refused.
+        reason: crate::paths::RootError,
+    },
 }
 
 /// Result type of the core library.

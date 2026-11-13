@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use armonika_server::cli::{self, user::UserCommand};
+use armonika_server::cli::{self, library::LibraryCommand, user::UserCommand};
 use armonika_server::config::Config;
 use armonika_server::serve;
 
@@ -25,6 +25,9 @@ enum Command {
     /// Manage users.
     #[command(subcommand)]
     User(UserCommand),
+    /// Manage libraries.
+    #[command(subcommand)]
+    Library(LibraryCommand),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -51,6 +54,10 @@ fn main() -> anyhow::Result<()> {
         Command::User(command) => {
             let (db, secrets) = cli::open_store(&config)?;
             cli::user::run(&db, &secrets, command)
+        }
+        Command::Library(command) => {
+            let db = cli::open_db(&config)?;
+            cli::library::run(&db, &config.data_dir, command)
         }
     }
 }

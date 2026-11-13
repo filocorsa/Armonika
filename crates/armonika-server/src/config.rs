@@ -9,6 +9,8 @@ use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
 
+pub use armonika_core::libraries::LibraryConfig;
+
 /// Variables with the `ARMONIKA_` prefix that other code reads directly.
 /// They are not configuration keys and must not reach the strict parser.
 /// The [`TOP_LEVEL_KEYS`] filter already excludes them; this list is defense
@@ -73,13 +75,6 @@ pub struct ScanConfig {
     pub interval: Duration,
     pub threads: usize,
     pub hash_on_start: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LibraryConfig {
-    pub name: String,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

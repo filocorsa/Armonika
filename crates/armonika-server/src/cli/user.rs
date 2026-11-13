@@ -1,4 +1,4 @@
-//! The `user` command: accounts, passwords, flags and API keys.
+//! The `user` command: accounts, passwords, flags, library access and API keys.
 //!
 //! Passwords are read from standard input (`--password-stdin`) or asked on the
 //! terminal without echo; they are never command-line arguments and never printed.
@@ -8,10 +8,13 @@
 use std::io::BufRead;
 
 use anyhow::{Context, bail};
+use armonika_core::access::{self, Permission};
 use armonika_core::db::{Connection, Db};
 use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, NewUser, User, UserFlagsUpdate};
 use clap::{ArgAction, Args, Subcommand};
+
+use crate::cli::library::find as find_library;
 
 /// Manage users.
 #[derive(Debug, Subcommand)]
@@ -68,6 +71,22 @@ pub enum UserCommand {
         /// Whether other users can see what this user is playing.
         #[arg(long, action = ArgAction::Set, value_name = "true|false")]
         share_now_playing: Option<bool>,
+    },
+    /// Give a user access to a library, replacing any previous permission.
+    Grant {
+        /// Login name.
+        name: String,
+        /// Name of the library.
+        library: String,
+        /// `listen` (browse, search and play) or `manage` (also add and fix music).
+        permission: Permission,
+    },
+    /// Take away the access of a user to a library.
+    Revoke {
+        /// Login name.
+        name: String,
+        /// Name of the library.
+        library: String,
     },
     /// Manage API keys.
     #[command(subcommand)]
@@ -190,6 +209,28 @@ pub fn run(db: &Db, sb: &SecretBox, command: UserCommand) -> anyhow::Result<()> 
             }
             db.write_blocking(|c| users::set_flags(c, &find(c, &name)?.id, flags))?;
             println!("updated user {name}");
+        }
+        UserCommand::Grant {
+            name,
+            library,
+            permission,
+        } => {
+            db.write_blocking(|c| {
+                let lib = find_library(c, &library)?;
+                access::grant(c, &find(c, &name)?.id, lib.id, permission)
+            })?;
+            println!("{name} can now {permission} on library {library}");
+        }
+        UserCommand::Revoke { name, library } => {
+            let had = db.write_blocking(|c| {
+                let lib = find_library(c, &library)?;
+                access::revoke(c, &find(c, &name)?.id, lib.id)
+            })?;
+            if had {
+                println!("revoked the access of {name} to library {library}");
+            } else {
+                println!("{name} had no access to library {library}");
+            }
         }
         UserCommand::ApiKey(ApiKeyCommand::Create { name, label }) => {
             let key =

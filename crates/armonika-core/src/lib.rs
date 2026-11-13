@@ -4,6 +4,7 @@ pub mod access;
 pub mod db;
 mod error;
 pub mod ids;
+pub mod libraries;
 pub mod paths;
 pub mod secret;
 pub mod text;
