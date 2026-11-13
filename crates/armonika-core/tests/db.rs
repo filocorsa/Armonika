@@ -359,3 +359,37 @@ fn library_names_are_unique_without_case() {
         .unwrap();
     assert!(duplicate);
 }
+
+/// Opening must wait (busy_timeout) for another connection that holds the database
+/// lock, even before switching to WAL.
+#[test]
+fn open_waits_for_a_locked_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("armonika.db");
+    let other = Connection::open(&path).unwrap();
+    other
+        .execute_batch("CREATE TABLE t (x); BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);")
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        other.execute_batch("COMMIT").unwrap();
+    });
+    let opened = Db::open(&path);
+    release.join().unwrap();
+    opened.unwrap();
+}
+
+#[test]
+fn negative_user_version_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("armonika.db");
+    Connection::open(&path)
+        .unwrap()
+        .pragma_update(None, "user_version", -1)
+        .unwrap();
+    let err = Db::open(&path).unwrap_err();
+    assert!(
+        matches!(err, armonika_core::Error::InvalidSchemaVersion(-1)),
+        "{err:?}"
+    );
+}

@@ -24,6 +24,12 @@ pub enum Error {
         /// Latest migration shipped with this build.
         latest: i64,
     },
+    /// `PRAGMA user_version` holds a negative number: the file was not written by
+    /// Armonika or is damaged.
+    #[error(
+        "database schema version {0} is invalid (negative); the file was not written by Armonika or is damaged"
+    )]
+    InvalidSchemaVersion(i64),
     /// A string is not a valid public identifier of the expected kind.
     #[error("invalid identifier {0:?}")]
     InvalidId(String),

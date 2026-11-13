@@ -43,12 +43,13 @@ impl Db {
     /// pending migration.
     pub fn open(path: &Path) -> Result<Db> {
         let mut writer = Connection::open(path)?;
+        // busy_timeout first: switching to WAL needs a lock another process may hold.
+        configure(&writer)?;
         let mode: String =
             writer.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
         if !mode.eq_ignore_ascii_case("wal") {
             return Err(Error::WalUnavailable(mode));
         }
-        configure(&writer)?;
         migrate(&mut writer)?;
 
         let manager = SqliteConnectionManager::file(path).with_init(|c| {
@@ -127,7 +128,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             latest,
         });
     }
-    for (version, sql) in (1..).zip(MIGRATIONS).skip(current as usize) {
+    // A negative version would wrap to a huge count and silently skip every migration.
+    let applied = usize::try_from(current).map_err(|_| Error::InvalidSchemaVersion(current))?;
+    for (version, sql) in (1..).zip(MIGRATIONS).skip(applied) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", version)?;
