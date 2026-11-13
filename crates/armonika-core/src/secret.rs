@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io::{ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -51,46 +51,66 @@ impl SecretBox {
         let env = match std::env::var(KEY_ENV) {
             Ok(v) => Some(v),
             Err(std::env::VarError::NotPresent) => None,
-            Err(std::env::VarError::NotUnicode(_)) => return Err(Error::InvalidSecretKey),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(Error::InvalidSecretKey {
+                    from: KeySource::Env,
+                });
+            }
         };
         Self::load_or_create_with(data_dir, env.as_deref())
     }
 
     /// Like [`SecretBox::load_or_create`], with the value of `ARMONIKA_SECRET_KEY`
     /// given by the caller.
+    ///
+    /// A new key file is written in full to a temporary file first and then linked
+    /// into place without replacing an existing file, so a crash or two servers
+    /// starting together never leave an empty or partial `secret.key`; when another
+    /// process wins the race, its key is used. An existing key file that is not valid
+    /// is reported, never replaced, because data sealed with it would be lost.
     pub fn load_or_create_with(data_dir: &Path, env_key: Option<&str>) -> Result<SecretBox> {
         if let Some(b64) = env_key.filter(|v| !v.trim().is_empty()) {
-            return Ok(SecretBox::from_key(decode_key(b64)?));
+            return Ok(SecretBox::from_key(decode_key(b64, KeySource::Env)?));
         }
         let path = data_dir.join(KEY_FILE);
         let file_error = |source| Error::SecretKeyFile {
             path: path.clone(),
             source,
         };
-        match fs::read_to_string(&path) {
-            Ok(text) => return Ok(SecretBox::from_key(decode_key(&text)?)),
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(file_error(e)),
+        if let Some(key) = read_key_file(&path)? {
+            return Ok(SecretBox::from_key(key));
         }
 
         let mut key = [0; KEY_LEN];
         random_bytes(&mut key)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        match options.open(&path) {
-            Ok(mut file) => {
-                writeln!(file, "{}", STANDARD.encode(key))
-                    .and_then(|()| file.sync_all())
-                    .map_err(file_error)?;
-                Ok(SecretBox::from_key(key))
-            }
+        let mut suffix = [0; 8];
+        random_bytes(&mut suffix)?;
+        let tmp = data_dir.join(format!(
+            ".{KEY_FILE}.{}.tmp",
+            suffix
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ));
+        write_new_file(&tmp, &key).map_err(|e| Error::SecretKeyFile {
+            path: tmp.clone(),
+            source: e,
+        })?;
+        let mut linked = fs::hard_link(&tmp, &path);
+        let _ = fs::remove_file(&tmp);
+        if let Err(e) = &linked
+            && e.kind() != ErrorKind::AlreadyExists
+        {
+            // The file system has no hard links (for example FAT): fall back to
+            // creating the file in place, still never replacing an existing one.
+            linked = write_new_file(&path, &key);
+        }
+        match linked {
+            Ok(()) => Ok(SecretBox::from_key(key)),
             // Another process created it in the meantime: use theirs.
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                let text = fs::read_to_string(&path).map_err(file_error)?;
-                Ok(SecretBox::from_key(decode_key(&text)?))
-            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => read_key_file(&path)?
+                .map(SecretBox::from_key)
+                .ok_or_else(|| file_error(e)),
             Err(e) => Err(file_error(e)),
         }
     }
@@ -123,12 +143,57 @@ impl SecretBox {
     }
 }
 
-fn decode_key(b64: &str) -> Result<[u8; KEY_LEN]> {
+/// Where a secret key came from, for error messages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeySource {
+    /// The `ARMONIKA_SECRET_KEY` variable.
+    Env,
+    /// The key file at this path.
+    File(PathBuf),
+}
+
+impl std::fmt::Display for KeySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeySource::Env => write!(f, "the {KEY_ENV} variable"),
+            KeySource::File(path) => write!(f, "the file {}", path.display()),
+        }
+    }
+}
+
+/// The key in the file at `path`, or `None` if the file does not exist.
+fn read_key_file(path: &Path) -> Result<Option<[u8; KEY_LEN]>> {
+    match fs::read_to_string(path) {
+        Ok(text) => decode_key(&text, KeySource::File(path.to_path_buf())).map(Some),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == ErrorKind::InvalidData => Err(Error::InvalidSecretKey {
+            from: KeySource::File(path.to_path_buf()),
+        }),
+        Err(source) => Err(Error::SecretKeyFile {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Writes `key` in base64 to the new file `path`, readable only by the owner on Unix,
+/// and flushes it to disk.
+fn write_new_file(path: &Path, key: &[u8; KEY_LEN]) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    writeln!(file, "{}", STANDARD.encode(key))?;
+    file.sync_all()
+}
+
+fn decode_key(b64: &str, from: KeySource) -> Result<[u8; KEY_LEN]> {
     STANDARD
         .decode(b64.trim())
         .ok()
         .and_then(|bytes| <[u8; KEY_LEN]>::try_from(bytes).ok())
-        .ok_or(Error::InvalidSecretKey)
+        .ok_or(Error::InvalidSecretKey { from })
 }
 
 /// Fills `buf` from the operating system random number generator.

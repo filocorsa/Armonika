@@ -27,10 +27,13 @@ pub enum Error {
     /// A string is not a valid public identifier of the expected kind.
     #[error("invalid identifier {0:?}")]
     InvalidId(String),
-    /// The secret key (from `ARMONIKA_SECRET_KEY` or the key file) is not 32 bytes in
-    /// base64. The value is never part of the message.
-    #[error("the secret key must be 32 bytes encoded in base64")]
-    InvalidSecretKey,
+    /// The secret key is not 32 bytes in base64. The message names where the key came
+    /// from, never its value.
+    #[error("the secret key from {from} is not 32 bytes encoded in base64")]
+    InvalidSecretKey {
+        /// Where the key came from.
+        from: crate::secret::KeySource,
+    },
     /// The secret key file could not be read or written.
     #[error("cannot access the secret key file {path}: {source}")]
     SecretKeyFile {

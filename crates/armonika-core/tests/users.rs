@@ -85,7 +85,7 @@ fn secret_key_file_is_reused_across_loads() {
     );
     assert!(matches!(
         SecretBox::load_or_create_with(dir.path(), Some("too-short")),
-        Err(Error::InvalidSecretKey)
+        Err(Error::InvalidSecretKey { .. })
     ));
 }
 
