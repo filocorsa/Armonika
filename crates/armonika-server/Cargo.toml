@@ -17,6 +17,7 @@ axum = "0.8.9"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 humantime-serde = "1.1.1"
+rpassword = "7.5.5"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 tracing = "0.1.44"

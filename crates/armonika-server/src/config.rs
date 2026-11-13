@@ -33,6 +33,9 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 
 const DEFAULT_FILE: &str = "armonika.toml";
 
+/// Name of the database file inside `data_dir`.
+pub const DB_FILE: &str = "armonika.db";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
@@ -165,6 +168,11 @@ impl Default for ListenBrainzConfig {
 }
 
 impl Config {
+    /// Path of the database file.
+    pub fn db_path(&self) -> PathBuf {
+        self.data_dir.join(DB_FILE)
+    }
+
     /// Loads the configuration. `path` is the `--config` value; without it
     /// `ARMONIKA_CONFIG` is used, then `armonika.toml` if it exists.
     pub fn load(path: Option<&Path>) -> anyhow::Result<Config> {

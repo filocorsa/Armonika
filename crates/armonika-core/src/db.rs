@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::Connection;
+pub use rusqlite::Connection;
 
 use crate::{Error, Result};
 

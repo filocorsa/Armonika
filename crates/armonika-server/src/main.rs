@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
+use armonika_server::cli::{self, user::UserCommand};
 use armonika_server::config::Config;
 use armonika_server::serve;
 
@@ -21,6 +22,9 @@ struct Cli {
 enum Command {
     /// Run the server.
     Serve,
+    /// Manage users.
+    #[command(subcommand)]
+    User(UserCommand),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -31,6 +35,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -43,5 +48,9 @@ fn main() -> anyhow::Result<()> {
             .enable_all()
             .build()?
             .block_on(serve::run(config)),
+        Command::User(command) => {
+            let (db, secrets) = cli::open_store(&config)?;
+            cli::user::run(&db, &secrets, command)
+        }
     }
 }
