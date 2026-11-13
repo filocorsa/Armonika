@@ -518,7 +518,7 @@ Ogni fase si chiude solo quando il suo **criterio di uscita** è vero.
 **Fase 0: Spike e impalcatura.** Gli spike del §11, la struttura della repository, CI (build, test, lint, benchmark), generatore di librerie finte.
 *Uscita:* motore di ricerca scelto con dati alla mano; recupero dei file da MeTube verificato; CI verde.
 
-**Fase 1: Fondamenta di ascolto.** Scansione (completa, incrementale, osservazione delle cartelle, collegamento file-traccia, tracce mancanti), database, ricerca, streaming con range HTTP, copertine, utenti, ruoli, librerie e permessi (§8.5), API OpenSubsonic (navigazione, ricerca, streaming, preferiti, playlist, scrobbling Last.fm/ListenBrainz), modalità headless, Docker.
+**Fase 1: Fondamenta di ascolto.** Scansione (completa, incrementale, osservazione delle cartelle, collegamento file-traccia, tracce mancanti), database, ricerca, streaming con range HTTP, copertine, utenti, ruoli, librerie e permessi (§8.5), API OpenSubsonic (navigazione, ricerca, streaming, preferiti, playlist, scrobbling ListenBrainz), modalità headless, Docker. *(Decisa con l'utente il 2026-11-13: Last.fm rinviato a dopo la fase 1, con il collegamento dall'interfaccia della fase 2.)*
 *Uscita:* l'utente usa Armonika ogni giorno sul suo homelab con almeno due app Subsonic (es. Symfonium e Feishin), i benchmark rispettano le soglie del §3, e spostare o rinominare a mano un file non fa perdere preferiti né playlist.
 
 **Fase 2: Il cuore di Armonika.** API nativa, interfaccia web di gestione (accesso, utenti, librerie e permessi, impostazioni, stato della scansione, coda, caricamento dal browser, revisione dei gruppi, revisione di tracce, modifica dei tag, registro e annullamento, cestino), riconoscimento con MusicBrainz + AcoustID e punteggio di confidenza calcolato da Armonika, controllo doppioni, scrittura dei tag, rinomina e spostamento dei file, limiti di spazio.
@@ -535,7 +535,7 @@ Nei commit, nelle PR e nei file del progetto non va indicato Claude come autore 
 
 ## 10. Dati di prova
 
-L'utente non ha ancora una libreria musicale, quindi:
+L'utente ha una libreria musicale piccola (circa 500-1000 canzoni, 2026-11-13): serve per l'uso quotidiano, non per misurare le soglie del §3. Quindi:
 - **Libreria grande finta**: generatore che crea centinaia di migliaia di file audio minuscoli (pochi ms di silenzio) con tag realistici e vari. Serve per i benchmark.
 - **Libreria "disordinata apposta"**: file con licenza Creative Commons (es. Free Music Archive, Jamendo) con tag rovinati di proposito: titoli stile YouTube, tag mancanti, album della libreria spezzati, doppioni (stessa registrazione e stessa edizione in due formati), falsi doppioni (stessa registrazione in una raccolta, registrazioni diverse della stessa canzone), copertine assenti, formati diversi. Serve per testare il riordino. Va documentata la provenienza e la licenza di ogni file.
 
