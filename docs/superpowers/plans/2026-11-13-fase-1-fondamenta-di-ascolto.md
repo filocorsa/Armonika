@@ -2,25 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** un server Armonika che scansiona una o più librerie, tiene tracce con identità stabile separate dai file, cerca in meno di 50 ms, fa streaming con range HTTP e serve le app Subsonic (navigazione, ricerca, copertine, preferiti, playlist, scrobbling) con utenti, librerie e permessi, installabile con Docker.
+**Goal:** un server Armonika che scansiona una o più librerie, tiene tracce con identità stabile separate dai file, cerca in meno di 50 ms, fa streaming con range HTTP e serve le app Subsonic (navigazione, ricerca, copertine, preferiti, playlist, scrobbling su ListenBrainz) con utenti, librerie e permessi, installabile con Docker.
 
-**Architecture:** workspace Cargo con le crate del design §7.5 che servono in questa fase: `armonika-core` (Glossario, database SQLite, utenti, permessi, dati personali), `armonika-media` (operazioni su un singolo file: tag, copertine, impronta del contenuto, transcodifica), `armonika-scanner` (scansione, collegamento file-traccia, album della libreria, osservazione delle cartelle), `armonika-search` (`SearchIndex` su Tantivy), `armonika-subsonic` (API OpenSubsonic su axum), `armonika-scrobble` (Last.fm e ListenBrainz), `armonika-server` (eseguibile, configurazione, comandi, wiring). Le API e lo scanner dipendono dal core, mai il contrario; lo scanner non conosce la ricerca: pubblica eventi di cambiamento che il server inoltra all'indice.
+**Architecture:** workspace Cargo con le crate del design §7.5 che servono in questa fase: `armonika-core` (Glossario, database SQLite, utenti, permessi, dati personali), `armonika-media` (operazioni su un singolo file: tag, copertine, impronta del contenuto, transcodifica), `armonika-scanner` (scansione, collegamento file-traccia, album della libreria, osservazione delle cartelle), `armonika-search` (`SearchIndex` su Tantivy), `armonika-subsonic` (API OpenSubsonic su axum), `armonika-scrobble` (ListenBrainz; Last.fm più avanti), `armonika-server` (eseguibile, configurazione, comandi, wiring). Le API e lo scanner dipendono dal core, mai il contrario; lo scanner non conosce la ricerca: pubblica eventi di cambiamento che il server inoltra all'indice.
 
 **Tech Stack:** Rust 1.99 (edition 2024), tokio, axum, tower-http, rusqlite (`bundled`), r2d2 + r2d2_sqlite, figment, clap, tracing, lofty 0.25 (solo lettura in questa fase), symphonia 0.6.1 (solo demux, per l'impronta del contenuto), blake3, tantivy, notify + notify-debouncer-full, walkdir, image, argon2, chacha20poly1305, uuid (v7), unicode-normalization, reqwest (rustls), ffmpeg esterno opzionale. Test: tempfile, assert_cmd, wiremock, tower (`ServiceExt::oneshot`).
 
 **Spec:** `docs/superpowers/specs/2026-11-12-armonika-design.md`, in particolare §3, §7, §8.1, §8.5, §8.7 (punti 1, 7, 8, 9, 10), §9 (fase 1) e §11. Esiti degli spike in `docs/spikes/`. Chi esegue legge design e piano insieme; il Glossario vale anche qui.
 
-## Decisioni di questo piano da confermare con l'utente
+## Decisioni di questo piano (confermate dall'utente il 2026-11-13)
 
 Sono scelte lasciate al builder (§12) o casi che il design non copre. Ognuna è applicata nel task indicato; se l'utente ne cambia una, si cambia solo quel task.
 
 1. **Password Subsonic in fase 1** (Task 3). Finché non c'è l'interfaccia (fase 2), la password Subsonic di un utente è inizialmente uguale alla password dell'account: si salvano sia l'hash argon2 (account) sia una copia cifrata in modo reversibile (Subsonic, §7.4), come fa Navidrome. Si cambia separatamente con `armonika user set-subsonic-password`. Le API key OpenSubsonic sono già disponibili.
 2. **Raccolte senza tag "artista dell'album"** (Task 8). Il design raggruppa per titolo dell'album e accredito dell'album; se il tag artista dell'album manca e nella stessa cartella le tracce con lo stesso titolo dell'album hanno artisti diversi, l'accredito dell'album diventa "Various Artists". Senza questa regola una raccolta senza quel tag si spezza in un album per artista.
 3. **Chromaprint in background rinviato alla fase 2** (Task 9). In fase 1 il passaggio in background calcola solo l'impronta del contenuto (serve al ricollegamento dei file spostati); l'impronta Chromaprint serve solo ai doppioni e al riconoscimento, che sono della fase 2.
-4. **Chiavi Last.fm** (Task 19). Last.fm richiede una chiave e un segreto di applicazione; in fase 1 si leggono dalla configurazione e, se mancano, Last.fm non è disponibile (ListenBrainz funziona sempre, con il token dell'utente).
+4. **Last.fm rinviato** (Task 19), deciso dall'utente: in fase 1 solo ListenBrainz. Il modulo dello scrobbling resta pronto per un secondo servizio (la colonna `service` ammette già `lastfm`), così aggiungerlo dopo non richiede migrazioni.
 5. **Porta predefinita 4747** (Task 1), per non scontrarsi con Navidrome (4533) se l'utente li prova insieme.
 6. **Immagine Docker su GHCR privato** finché la repository è privata (Task 21): sul server di casa serve `docker login ghcr.io` con un token personale, oppure si costruisce l'immagine sul posto.
-7. **Musica vera per l'uscita della fase** (Task 25). Il criterio di uscita (uso quotidiano, rimisura della ricerca su una libreria vera, prima scansione su un HDD vero) richiede una libreria musicale vera e un HDD. Va deciso con l'utente da dove viene la musica.
+7. **Libreria vera piccola** (Task 25). L'utente ha circa 500-1000 canzoni, non 50.000. Le soglie del §3 restano (Armonika sarà open source e altri hanno librerie grandi), ma si verificano sulla libreria finta generata, anche sull'hardware di casa; la libreria vera serve per l'uso quotidiano e per giudicare a mano la qualità della ricerca, non per le soglie. Disco e macchina di casa per le misure: da decidere con l'utente prima del Task 25.
 
 ## Revisione dello schema contro MusicBrainz (2026-11-13, approvata dall'utente)
 
@@ -50,7 +50,7 @@ Non adottati (da aggiungere con il punto 5 quando servono): alias multilingue de
 - **Nessun file di una libreria viene modificato, spostato o cancellato in questa fase.** Lofty si usa solo in lettura (mai `save_to_path`); la cartella `.armonika/` non si crea. La scansione ignora `.armonika/` in ogni libreria.
 - Multipiattaforma: percorsi solo con `std::path`; nel database i percorsi relativi alla radice della libreria si salvano con separatore `/` (funzione unica `rel_path_to_db` / `rel_path_from_db` in `armonika-core`).
 - Formati accettati dalla scansione (§7.2): estensioni `mp3`, `flac`, `ogg`, `opus`, `m4a`, `wav`, `aif`, `aiff`, confrontate senza distinguere maiuscole.
-- Segreti mai committati né scritti nei log: password, chiave di cifratura, API key, token ListenBrainz, session key Last.fm.
+- Segreti mai committati né scritti nei log: password, chiave di cifratura, API key, token ListenBrainz.
 - Soglie (§3), verificate dal Task 23: ricerca p95 < 50 ms lato server su 100.000 tracce con 1 errore di battitura; primo byte audio < 200 ms senza transcodifica; prima scansione di 50.000 file: obiettivo indicativo < 5 min su HDD (§11 punto 5); scansioni successive rileggono solo i file con dimensione o data di modifica cambiate; RAM a riposo indicativa < 100 MB con 100.000 tracce.
 - User-Agent per servizi esterni: `Armonika/<versione> ( https://github.com/filocorsa/Armonika )`.
 
@@ -106,9 +106,9 @@ crates/armonika-subsonic/
   src/auth.rs, src/response.rs, src/error.rs
   src/system.rs, src/browse.rs, src/search.rs, src/media.rs, src/annotate.rs, src/playlists.rs
 crates/armonika-scrobble/
-  src/lib.rs, src/listenbrainz.rs, src/lastfm.rs, src/outbox.rs
+  src/lib.rs, src/listenbrainz.rs, src/outbox.rs
 crates/armonika-server/
-  src/main.rs, src/config.rs, src/cli/{user.rs,library.rs,track.rs,lastfm.rs}, src/serve.rs
+  src/main.rs, src/config.rs, src/cli/{user.rs,library.rs,track.rs}, src/serve.rs
 bench/testdata/src/fixture.rs      file audio con tag per i test delle altre crate
 bench/harness/                     crate armonika-bench: misura le soglie del §3
 Dockerfile, docker-compose.example.yml, .github/workflows/docker.yml
@@ -135,9 +135,9 @@ docs/phase-1-acceptance.md         esito dell'uscita della fase
   - `ffmpeg_path: Option<PathBuf>` (se assente si cerca `ffmpeg` nel `PATH`);
   - `transcode.format: String` (default `mp3`), `transcode.bitrate_kbps: u32` (default `192`);
   - `search.ignored_articles: String` (default `The El La Los Las Le Les Il Lo Gli I`);
-  - `lastfm.api_key: Option<String>`, `lastfm.secret: Option<String>`, `listenbrainz.url: String` (default `https://api.listenbrainz.org`).
+  - `listenbrainz.url: String` (default `https://api.listenbrainz.org`).
 - Fonti in ordine di precedenza crescente: default, file TOML (`--config <path>` oppure `ARMONIKA_CONFIG`, altrimenti `armonika.toml` se esiste), variabili `ARMONIKA_*` con `__` come separatore dei livelli (`ARMONIKA_SERVER__BIND`, `ARMONIKA_DATA_DIR`). Libreria figment.
-- CLI (clap): `armonika serve`, e i gruppi `user`, `library`, `track`, `lastfm` aggiunti dai task successivi. Senza sottocomando si stampa l'aiuto. `--version` resta come nel test esistente.
+- CLI (clap): `armonika serve`, e i gruppi `user`, `library`, `track` aggiunti dai task successivi. Senza sottocomando si stampa l'aiuto. `--version` resta come nel test esistente.
 
 - [ ] **Step 1: Test che falliscono** in `tests/config.rs`: `defaults_without_file` (bind `0.0.0.0:4747`, data_dir `data`, interval 1 h), `file_overrides_defaults`, `env_overrides_file` (`ARMONIKA_SERVER__BIND=127.0.0.1:9000`), `libraries_from_toml` (due `[[library]]`), `unknown_key_is_rejected` (errore che nomina la chiave). In `tests/cli.rs`: `serve_answers_on_bind_address`: avvia `armonika serve` con `ARMONIKA_SERVER__BIND=127.0.0.1:<porta libera>` e `ARMONIKA_DATA_DIR=<tempdir>`, attende fino a 10 s che `GET /` risponda, poi termina il processo.
 - [ ] **Step 2:** `cargo test -p armonika-server`: FAIL (moduli mancanti).
@@ -669,27 +669,26 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 
 ## M5. Scrobbling (ramo `phase-1/m5-scrobble`)
 
-### Task 19: Last.fm e ListenBrainz
+### Task 19: ListenBrainz
 
 **Files:**
-- Create: `crates/armonika-scrobble/` (Cargo.toml, `src/lib.rs`, `src/outbox.rs`, `src/listenbrainz.rs`, `src/lastfm.rs`), `crates/armonika-server/src/cli/lastfm.rs`
+- Create: `crates/armonika-scrobble/` (Cargo.toml, `src/lib.rs`, `src/outbox.rs`, `src/listenbrainz.rs`)
 - Modify: `crates/armonika-subsonic/src/annotate.rs`, `crates/armonika-server/src/serve.rs`, `crates/armonika-server/src/cli/user.rs`
-- Test: `crates/armonika-scrobble/tests/listenbrainz.rs`, `tests/lastfm.rs`, `tests/outbox.rs`
+- Test: `crates/armonika-scrobble/tests/listenbrainz.rs`, `tests/outbox.rs`
 
 **Interfaces:**
 - Produces:
-  - `ScrobbleSink` (`Clone`): `now_playing(&UserId, &TrackId)` (best effort, nessun nuovo tentativo) e `submitted(&UserId, &TrackId, played_at_ms)` (scrive una riga in `scrobble_outbox` per ogni servizio collegato all'utente, nella stessa transazione di `record_play`).
-  - `outbox::run(db, sb, clients, stop)`: invia le righe scadute a lotti (ListenBrainz fino a 100 ascolti, Last.fm fino a 50); in caso di errore di rete o 5xx, nuovo tentativo con attesa esponenziale da 1 min a 6 h; errore di autenticazione: la riga resta e si registra un `warn` per utente una sola volta; dopo 14 giorni una riga si scarta.
-  - Dati inviati (Glossario): titolo, accredito, album, durata, numero di traccia dai tag della traccia; `recording_mbid` (ListenBrainz `additional_info.recording_mbid`, Last.fm `mbid`) se noto. `listened_at` / `timestamp` in secondi.
+  - `ScrobbleSink` (`Clone`): `now_playing(&UserId, &TrackId)` (best effort, nessun nuovo tentativo) e `submitted(&UserId, &TrackId, played_at_ms)` (scrive una riga in `scrobble_outbox` per ogni servizio collegato all'utente, in fase 1 solo ListenBrainz, nella stessa transazione di `record_play`).
+  - `outbox::run(db, sb, services: Vec<Arc<dyn ScrobbleService>>, stop)`: invia le righe scadute a lotti (ListenBrainz fino a 100 ascolti). `ScrobbleService` è un trait con `name()`, `now_playing(..)` e `submit(.., batch) -> Result<(), SubmitError { Retry, Auth, Rejected }>`, così Last.fm si aggiunge più avanti come seconda implementazione; in caso di errore di rete o 5xx, nuovo tentativo con attesa esponenziale da 1 min a 6 h; errore di autenticazione: la riga resta e si registra un `warn` per utente una sola volta; dopo 14 giorni una riga si scarta.
+  - Dati inviati (Glossario): titolo, accredito, album, durata, numero di traccia dai tag della traccia; `recording_mbid` (`additional_info.recording_mbid`) se noto. `listened_at` in secondi.
   - ListenBrainz: `POST {url}/1/submit-listens` (`listen_type` `single`/`import` e `playing_now`), intestazione `Authorization: Token <token>`; `validate_token` con `GET /1/validate-token`.
-  - Last.fm: API `https://ws.audioscrobbler.com/2.0/`, firma `api_sig` = md5 dei parametri ordinati per nome concatenati più il segreto; `track.updateNowPlaying`, `track.scrobble` (array `artist[i]`, `track[i]`, `timestamp[i]`). Collegamento senza interfaccia: `armonika lastfm link <user>` chiede `auth.getToken`, stampa l'URL `https://www.last.fm/api/auth/?api_key=...&token=...`, attende che l'utente prema Invio, poi `auth.getSession` e salva la session key cifrata.
-  - CLI: `armonika user listenbrainz <name> --token-stdin` (verifica il token e lo salva cifrato), `armonika user scrobble-unlink <name> lastfm|listenbrainz`.
+  - CLI: `armonika user listenbrainz <name> --token-stdin` (verifica il token e lo salva cifrato), `armonika user scrobble-unlink <name> listenbrainz`.
 
-- [ ] **Step 1: Test che falliscono** (server finti con `wiremock`): `listenbrainz_submit_payload_shape` (con `recording_mbid`), `listenbrainz_now_playing`, `lastfm_signature_matches_reference` (vettore calcolato a mano nel test), `lastfm_batch_scrobble`, `outbox_retries_after_5xx`, `outbox_keeps_rows_on_auth_error`, `outbox_drops_after_14_days`, `no_linked_service_writes_no_rows`, `tokens_are_stored_encrypted`.
+- [ ] **Step 1: Test che falliscono** (server finti con `wiremock`): `listenbrainz_submit_payload_shape` (con `recording_mbid`), `listenbrainz_now_playing`, `listenbrainz_batch_of_100`, `outbox_retries_after_5xx`, `outbox_keeps_rows_on_auth_error`, `outbox_drops_after_14_days`, `no_linked_service_writes_no_rows`, `tokens_are_stored_encrypted`.
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3: Implementare** e collegare a `scrobble` (Task 17).
 - [ ] **Step 4:** test verdi.
-- [ ] **Step 5: Commit** `feat(scrobble): last.fm and listenbrainz with a persistent outbox`
+- [ ] **Step 5: Commit** `feat(scrobble): listenbrainz with a persistent outbox`
 - [ ] **Step 6: Pull request M5** `Phase 1 M5: scrobbling`.
 
 ---
@@ -708,7 +707,7 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 
 - [ ] **Step 1: Test che falliscono** (processo vero con `assert_cmd`, libreria di fixture, admin da variabili d'ambiente): `e2e_scan_search_stream` (attende che `getScanStatus` dica `scanning=false`, `search3` trova una traccia, `stream` restituisce i byte del file), `headless_disables_root_but_keeps_api`, `restart_keeps_ids_and_stars`.
 - [ ] **Step 2:** FAIL.
-- [ ] **Step 3: Implementare**; scrivere `docs/configuration.md` (tutte le chiavi del Task 1 con default e variabile d'ambiente, avviso su `inbox` non ancora attiva, nota su Last.fm e su chi usa Armonika per un servizio commerciale, §7.2) e aggiornare il README con "come provarlo".
+- [ ] **Step 3: Implementare**; scrivere `docs/configuration.md` (tutte le chiavi del Task 1 con default e variabile d'ambiente, avviso su `inbox` non ancora attiva, nota su chi usa Armonika per un servizio commerciale, §7.2) e aggiornare il README con "come provarlo".
 - [ ] **Step 4:** test verdi.
 - [ ] **Step 5: Commit** `feat(server): full startup wiring, graceful shutdown and headless mode`
 
@@ -783,11 +782,11 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 **Files:**
 - Create: `docs/phase-1-acceptance.md`
 
-- [ ] **Step 1: Installazione sul server di casa** con Docker (Task 21), libreria vera montata in sola lettura, due utenti oltre all'admin (uno con solo ascolto e senza download offline).
-- [ ] **Step 2: Symfonium e Feishin**, per ognuna: accesso con utente e password, sincronizzazione completa, navigazione per artista e album, ricerca con un errore di battitura, riproduzione con avanzamento nella traccia, copertine, preferito su traccia, album e artista, valutazione, creazione e modifica di una playlist, scrobbling su ListenBrainz (e Last.fm se configurato), ripresa della coda su un secondo dispositivo, download offline negato all'utente senza permesso. Ogni voce: ok o problema, con versione dell'app.
+- [ ] **Step 1: Installazione sul server di casa** con Docker (Task 21), libreria vera dell'utente (circa 500-1000 canzoni) montata in sola lettura, due utenti oltre all'admin (uno con solo ascolto e senza download offline).
+- [ ] **Step 2: Symfonium e Feishin**, per ognuna: accesso con utente e password, sincronizzazione completa, navigazione per artista e album, ricerca con un errore di battitura, riproduzione con avanzamento nella traccia, copertine, preferito su traccia, album e artista, valutazione, creazione e modifica di una playlist, scrobbling su ListenBrainz, ripresa della coda su un secondo dispositivo, download offline negato all'utente senza permesso. Ogni voce: ok o problema, con versione dell'app.
 - [ ] **Step 3: Spostamento a mano**: con un file manager spostare e rinominare un file con preferito e in una playlist; dopo la scansione automatica la traccia è la stessa nelle due app (stesso preferito, stessa posizione nella playlist). Ripetere spostando e ritaggando il file con un altro programma: la traccia torna dopo il passaggio in background.
 - [ ] **Step 4: Disco staccato**: smontare il disco della libreria (o rinominare la cartella), attendere una scansione, rimontare: nessun dato personale perso.
-- [ ] **Step 5: Misure su hardware vero**: `armonika-bench` sulla libreria vera (ricerca) e prima scansione su HDD con 1, 4 e 8 thread (`scan.threads`); se i 5 minuti per 50.000 file non sono raggiungibili, proporre all'utente la nuova soglia con il motivo (§11 punto 5).
+- [ ] **Step 5: Misure su hardware vero** (decisione 7): generare con `gen-big` una libreria finta da 50.000 tracce sul disco di casa (HDD se c'è) ed eseguire `armonika-bench` sulla macchina di casa: prima scansione con 1, 4 e 8 thread (`scan.threads`), ricerca, primo byte, RAM. Se i 5 minuti per 50.000 file non sono raggiungibili, proporre all'utente la nuova soglia con il motivo (§11 punto 5). Sulla libreria vera: 30 ricerche scritte a mano (con errori, senza accenti, parti di titolo) e giudizio dell'utente sui primi risultati, annotato.
 - [ ] **Step 6: Uso quotidiano** per almeno una settimana; problemi annotati in `docs/phase-1-acceptance.md`.
 - [ ] **Step 7:** commit `docs: phase 1 acceptance results` e pull request M6 `Phase 1 M6: delivery and measurements`. La fase 1 è chiusa quando l'utente conferma il criterio di uscita del §9.
 
@@ -797,6 +796,7 @@ Riferimento: https://opensubsonic.netlify.app/docs/ (endpoint, parametri, campi)
 
 - Impronta Chromaprint in background, edit list degli M4A, corpus Opus: fase 2 (decisione 3).
 - Riconoscimento dell'atomo `keys` negli M4A, scrittura dei tag, livelli di scrittura oltre "Sola lettura", cestino, `inbox`, coda, limiti di spazio: fase 2 (la colonna `write_level` esiste già ma vale sempre `read_only`).
+- Last.fm (decisione 4): dopo la fase 1, come seconda implementazione di `ScrobbleService`, con il collegamento dall'interfaccia della fase 2.
 - Testi delle canzoni (`getLyrics`, estensione `songLyrics`), informazioni su artisti e album da servizi esterni: non previsti dal design per la fase 1.
 - **Nota per la fase 2:** MusicBrainz unisce entità e reindirizza i vecchi MBID, quindi file taggati in anni diversi possono avere MBID diversi per lo stesso artista o la stessa edizione. Quando il riconoscimento lo scopre, servono l'unione di due artisti (con le regole dei dati personali del §8.7 punto 6 e `id_redirects`) e l'aggiornamento di `artists.mbid`, che oggi è `UNIQUE`.
 - Binari su GitHub Releases: con il rilascio pubblico (fine fase 2).
