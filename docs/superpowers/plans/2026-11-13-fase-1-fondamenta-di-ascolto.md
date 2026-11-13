@@ -169,6 +169,9 @@ Schema (`0001_initial.sql`). Tempi in millisecondi Unix (`INTEGER`). Questo è i
 -- Convenzione (revisione contro lo schema di MusicBrainz, punto 8): ogni entità ha una
 -- chiave interna `id INTEGER PRIMARY KEY` usata da tutti i collegamenti e un
 -- `public_id TEXT UNIQUE` stabile, l'unico esposto nelle API.
+-- SQLite non indicizza il lato figlio di una chiave esterna: ogni colonna di chiave esterna
+-- che non apre una chiave primaria o un altro indice ha un indice suo, altrimenti ogni
+-- cancellazione a cascata (rimozione di una libreria, di un utente) scorre tutta la tabella.
 CREATE TABLE users (
   id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -179,10 +182,11 @@ CREATE TABLE users (
 CREATE TABLE api_keys (
   key_hash TEXT PRIMARY KEY,                -- blake3 esadecimale della chiave
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  label TEXT NOT NULL, created_at INTEGER NOT NULL);
+  label TEXT NOT NULL, created_at INTEGER NOT NULL,
+  UNIQUE (user_id, label));
 CREATE TABLE libraries (
   id INTEGER PRIMARY KEY,                   -- esposto così com'è: le app vogliono un intero
-  name TEXT NOT NULL UNIQUE, root TEXT NOT NULL,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE, root TEXT NOT NULL,
   write_level TEXT NOT NULL DEFAULT 'read_only'
     CHECK (write_level IN ('read_only','tags','tags_and_organize')),
   created_at INTEGER NOT NULL);
@@ -191,6 +195,7 @@ CREATE TABLE library_access (
   library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
   permission TEXT NOT NULL CHECK (permission IN ('listen','manage')),
   PRIMARY KEY (user_id, library_id));
+CREATE INDEX library_access_library ON library_access(library_id);
 CREATE TABLE artists (
   id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL, norm_name TEXT NOT NULL, sort_name TEXT, mbid TEXT UNIQUE,
@@ -208,6 +213,7 @@ CREATE TABLE album_artists (
   position INTEGER NOT NULL, artist_id INTEGER NOT NULL REFERENCES artists(id),
   credited_name TEXT NOT NULL, join_phrase TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (album_id, position));
+CREATE INDEX album_artists_artist ON album_artists(artist_id);
 CREATE TABLE tracks (
   id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
   library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
@@ -234,6 +240,7 @@ CREATE TABLE tracks (
   added_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, missing_since INTEGER);
 CREATE UNIQUE INDEX tracks_present_path ON tracks(library_id, rel_path) WHERE state = 'present';
 CREATE INDEX tracks_album ON tracks(library_album_id);
+CREATE INDEX tracks_state ON tracks(library_id, state);
 CREATE INDEX tracks_prefilter ON tracks(library_id, size, mtime_ms) WHERE state = 'missing';
 CREATE INDEX tracks_hash ON tracks(library_id, content_hash);
 CREATE INDEX tracks_hash_pending ON tracks(hash_state) WHERE hash_state = 'pending';
@@ -242,6 +249,7 @@ CREATE TABLE track_artists (
   position INTEGER NOT NULL, artist_id INTEGER NOT NULL REFERENCES artists(id),
   credited_name TEXT NOT NULL, join_phrase TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (track_id, position));
+CREATE INDEX track_artists_artist ON track_artists(artist_id);
 CREATE TABLE track_genres (
   track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, genre TEXT NOT NULL,
   PRIMARY KEY (track_id, genre));
@@ -253,28 +261,35 @@ CREATE TABLE track_annotations (
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   play_count INTEGER NOT NULL DEFAULT 0, last_played_at INTEGER,
   PRIMARY KEY (user_id, track_id));
+CREATE INDEX track_annotations_track ON track_annotations(track_id);
 CREATE TABLE album_annotations (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   album_id INTEGER NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   PRIMARY KEY (user_id, album_id));
+CREATE INDEX album_annotations_album ON album_annotations(album_id);
 CREATE TABLE artist_annotations (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
   starred_at INTEGER, rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   PRIMARY KEY (user_id, artist_id));
+CREATE INDEX artist_annotations_artist ON artist_annotations(artist_id);
 CREATE TABLE play_history (
   id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, played_at INTEGER NOT NULL);
+CREATE INDEX play_history_user ON play_history(user_id, played_at);
+CREATE INDEX play_history_track ON play_history(track_id);
 CREATE TABLE playlists (
   id INTEGER PRIMARY KEY, public_id TEXT NOT NULL UNIQUE,
   owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL, comment TEXT, public INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX playlists_owner ON playlists(owner_id);
 CREATE TABLE playlist_entries (
   playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
   position INTEGER NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   PRIMARY KEY (playlist_id, position));
+CREATE INDEX playlist_entries_track ON playlist_entries(track_id);
 CREATE TABLE play_queues (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   current_index INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
@@ -283,10 +298,12 @@ CREATE TABLE play_queue_entries (
   user_id INTEGER NOT NULL REFERENCES play_queues(user_id) ON DELETE CASCADE,
   position INTEGER NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, position));
+CREATE INDEX play_queue_entries_track ON play_queue_entries(track_id);
 CREATE TABLE now_playing (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, client TEXT NOT NULL,
   track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, started_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, client));
+CREATE INDEX now_playing_track ON now_playing(track_id);
 CREATE TABLE scrobble_accounts (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   service TEXT NOT NULL CHECK (service IN ('lastfm','listenbrainz')),
@@ -295,6 +312,9 @@ CREATE TABLE scrobble_outbox (
   id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   service TEXT NOT NULL, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
   played_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL);
+CREATE INDEX scrobble_outbox_user ON scrobble_outbox(user_id);
+CREATE INDEX scrobble_outbox_track ON scrobble_outbox(track_id);
+CREATE INDEX scrobble_outbox_due ON scrobble_outbox(next_attempt_at);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 

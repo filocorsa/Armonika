@@ -197,6 +197,19 @@ fn create_rename_and_lookup() {
         assert_eq!(libraries::by_name(c, "Renamed")?.unwrap().id, id);
         let names: Vec<String> = libraries::list(c)?.into_iter().map(|l| l.name).collect();
         assert_eq!(names, ["Renamed", "Second"]);
+
+        // Names are compared without case, like user names.
+        assert!(matches!(
+            libraries::create(c, "SECOND", &f.mkdir("third"), &data),
+            Err(Error::LibraryExists(_))
+        ));
+        assert!(matches!(
+            libraries::rename(c, id, "second"),
+            Err(Error::LibraryExists(_))
+        ));
+        assert_eq!(libraries::by_name(c, "renamed")?.unwrap().id, id);
+        libraries::rename(c, id, "RENAMED")?;
+        assert_eq!(libraries::by_name(c, "Renamed")?.unwrap().name, "RENAMED");
         Ok(())
     })
     .unwrap();
@@ -366,6 +379,38 @@ fn remove_keeps_files_on_disk() {
             }
         }
 
+        // Everything else that hangs off a track or an album, once for a track of the
+        // removed library (t1) and once for the kept track.
+        let album = insert_album(c, id, "al-1");
+        let kept_album = insert_album(c, keep, "al-2");
+        c.execute_batch(&format!(
+            "UPDATE tracks SET library_album_id = {album} WHERE id IN ({t1}, {t2});
+             UPDATE tracks SET library_album_id = {kept_album} WHERE id = {kept};
+             INSERT INTO artists (id, public_id, name, norm_name, updated_at)
+             VALUES (1, 'ar-1', 'A', 'a', 0);
+             INSERT INTO library_access (user_id, library_id, permission)
+             VALUES (1, {id}, 'listen'), (1, {keep}, 'listen');
+             INSERT INTO album_artists (album_id, position, artist_id, credited_name)
+             VALUES ({album}, 0, 1, 'A'), ({kept_album}, 0, 1, 'A');
+             INSERT INTO track_artists (track_id, position, artist_id, credited_name)
+             VALUES ({t1}, 0, 1, 'A'), ({kept}, 0, 1, 'A');
+             INSERT INTO track_genres (track_id, genre) VALUES ({t1}, 'jazz'), ({kept}, 'jazz');
+             INSERT INTO track_annotations (user_id, track_id, rating)
+             VALUES (1, {t1}, 5), (1, {kept}, 4);
+             INSERT INTO album_annotations (user_id, album_id, rating)
+             VALUES (1, {album}, 5), (1, {kept_album}, 4);
+             INSERT INTO artist_annotations (user_id, artist_id, rating) VALUES (1, 1, 5);
+             INSERT INTO play_history (user_id, track_id, played_at)
+             VALUES (1, {t1}, 1), (1, {t2}, 2), (1, {kept}, 3);
+             INSERT INTO play_queues (user_id, changed_at, changed_by) VALUES (1, 0, 'test');
+             INSERT INTO play_queue_entries (user_id, position, track_id)
+             VALUES (1, 0, {t1}), (1, 1, {kept}), (1, 2, {t2});
+             INSERT INTO now_playing (user_id, client, track_id, started_at)
+             VALUES (1, 'phone', {t1}, 0), (1, 'desktop', {kept}, 0);
+             INSERT INTO scrobble_outbox (user_id, service, track_id, played_at, next_attempt_at)
+             VALUES (1, 'listenbrainz', {t1}, 1, 0), (1, 'listenbrainz', {kept}, 3, 0);"
+        ))?;
+
         let expected = RemovalSummary {
             tracks: 2,
             playlists_touched: 2,
@@ -378,6 +423,30 @@ fn remove_keeps_files_on_disk() {
         assert_eq!(count("SELECT COUNT(*) FROM tracks"), 1);
         assert_eq!(count("SELECT COUNT(*) FROM playlist_entries"), 2);
         assert_eq!(count("SELECT COUNT(*) FROM playlists"), 3);
+        // Only the rows of the kept library are left.
+        for (table, column, value) in [
+            ("library_albums", "id", kept_album),
+            ("library_access", "library_id", keep.0),
+            ("album_artists", "album_id", kept_album),
+            ("album_annotations", "album_id", kept_album),
+            ("track_artists", "track_id", kept),
+            ("track_genres", "track_id", kept),
+            ("track_annotations", "track_id", kept),
+            ("play_history", "track_id", kept),
+            ("play_queue_entries", "track_id", kept),
+            ("now_playing", "track_id", kept),
+            ("scrobble_outbox", "track_id", kept),
+        ] {
+            let rows: Vec<i64> = c
+                .prepare(&format!("SELECT {column} FROM {table}"))?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(rows, [value], "{table}");
+        }
+        // Artists are shared by every library: they and their annotations stay.
+        assert_eq!(count("SELECT COUNT(*) FROM artists"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM artist_annotations"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM play_queues"), 1);
         assert!(matches!(
             libraries::remove(c, id),
             Err(Error::LibraryNotFound(_))
@@ -387,6 +456,22 @@ fn remove_keeps_files_on_disk() {
     .unwrap();
     assert!(song.is_file(), "removing a library must never delete files");
     assert_eq!(std::fs::read(&song).unwrap(), b"not really flac");
+}
+
+/// Inserts a minimal library album and returns its internal key.
+fn insert_album(
+    c: &rusqlite::Connection,
+    library: armonika_core::ids::LibraryId,
+    public_id: &str,
+) -> i64 {
+    c.execute(
+        "INSERT INTO library_albums (public_id, library_id, group_key, title, artist_credit,
+                                     created_at, updated_at)
+         VALUES (?1, ?2, 'k', 'Album', 'A', 0, 0)",
+        rusqlite::params![public_id, library.0],
+    )
+    .unwrap();
+    c.last_insert_rowid()
 }
 
 /// Inserts a minimal present track and returns its internal key.

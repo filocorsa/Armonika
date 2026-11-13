@@ -255,3 +255,107 @@ fn reversing_a_merge_keeps_one_redirect() {
         .unwrap();
     assert_eq!(rows, vec![(b.to_string(), a.to_string())]);
 }
+
+/// SQLite does not index the child side of a foreign key: without an index every
+/// cascade scans the whole child table. Each foreign key must be the leading part of a
+/// non-partial index (a primary key counts).
+#[test]
+fn child_side_of_every_foreign_key_is_indexed() {
+    let (_dir, db) = open_temp();
+    let missing = db
+        .read_blocking(|c| {
+            let tables: Vec<String> = c
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut missing = Vec::new();
+            for table in tables {
+                // Column lists of the foreign keys, in key order.
+                let mut fks: std::collections::BTreeMap<i64, Vec<String>> = Default::default();
+                let mut stmt = c.prepare("SELECT id, \"from\" FROM pragma_foreign_key_list(?1)")?;
+                let rows = stmt.query_map([&table], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                for row in rows {
+                    let (id, col): (i64, String) = row?;
+                    fks.entry(id).or_default().push(col);
+                }
+                // Leading columns of every non-partial index.
+                let mut indexes: Vec<Vec<String>> = Vec::new();
+                let names: Vec<String> = c
+                    .prepare("SELECT name FROM pragma_index_list(?1) WHERE partial = 0")?
+                    .query_map([&table], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                for name in names {
+                    indexes.push(
+                        c.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?
+                            .query_map([&name], |r| r.get(0))?
+                            .collect::<rusqlite::Result<_>>()?,
+                    );
+                }
+                // An INTEGER PRIMARY KEY is the rowid, indexed by the table itself.
+                let rowid: Vec<String> = c
+                    .prepare(
+                        "SELECT name FROM pragma_table_info(?1)
+                         WHERE pk = 1 AND upper(type) = 'INTEGER'
+                           AND (SELECT count(*) FROM pragma_table_info(?1) WHERE pk > 0) = 1",
+                    )?
+                    .query_map([&table], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                if !rowid.is_empty() {
+                    indexes.push(rowid);
+                }
+                for cols in fks.into_values() {
+                    if !indexes.iter().any(|ix| ix.starts_with(&cols)) {
+                        missing.push(format!("{table}({})", cols.join(", ")));
+                    }
+                }
+            }
+            Ok(missing)
+        })
+        .unwrap();
+    assert!(
+        missing.is_empty(),
+        "foreign keys without an index: {missing:?}"
+    );
+}
+
+#[test]
+fn api_key_labels_are_unique_per_user() {
+    let (_dir, db) = open_temp();
+    let duplicate = db
+        .write_blocking(|c| {
+            c.execute_batch(
+                "INSERT INTO users (id, public_id, name, password_hash, subsonic_password,
+                                    created_at)
+                 VALUES (1, 'u-1', 'alice', 'x', x'00', 0), (2, 'u-2', 'bob', 'x', x'00', 0);
+                 INSERT INTO api_keys (key_hash, user_id, label, created_at)
+                 VALUES ('h1', 1, 'phone', 0), ('h2', 2, 'phone', 0);",
+            )?;
+            Ok(c.execute(
+                "INSERT INTO api_keys (key_hash, user_id, label, created_at)
+                 VALUES ('h3', 1, 'phone', 0)",
+                [],
+            )
+            .is_err())
+        })
+        .unwrap();
+    assert!(
+        duplicate,
+        "a second key with the same label for one user was accepted"
+    );
+}
+
+#[test]
+fn library_names_are_unique_without_case() {
+    let (_dir, db) = open_temp();
+    let duplicate = db
+        .write_blocking(|c| {
+            insert_library(c);
+            Ok(c.execute(
+                "INSERT INTO libraries (name, root, created_at) VALUES ('MUSIC', '/other', 0)",
+                [],
+            )
+            .is_err())
+        })
+        .unwrap();
+    assert!(duplicate);
+}

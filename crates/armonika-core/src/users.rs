@@ -232,22 +232,24 @@ pub fn list(conn: &Connection) -> Result<Vec<User>> {
 /// base64url; only its hash is stored, so this is the only time it can be read.
 pub fn create_api_key(conn: &Connection, user: &UserId, label: &str) -> Result<String> {
     let key = require_user(conn, user)?;
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM api_keys WHERE user_id = ?1 AND label = ?2)",
-        params![key, label],
-        |r| r.get(0),
-    )?;
-    if exists {
-        return Err(Error::ApiKeyLabelExists(label.to_owned()));
-    }
     let mut bytes = [0; 32];
     random_bytes(&mut bytes)?;
     let api_key = URL_SAFE_NO_PAD.encode(bytes);
-    conn.execute(
+    let inserted = conn.execute(
         "INSERT INTO api_keys (key_hash, user_id, label, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![api_key_hash(&api_key), key, label, now_ms()],
-    )?;
-    Ok(api_key)
+    );
+    match inserted {
+        Ok(_) => Ok(api_key),
+        // UNIQUE (user_id, label); a clash on the key hash itself would be a
+        // SQLITE_CONSTRAINT_PRIMARYKEY instead.
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+        {
+            Err(Error::ApiKeyLabelExists(label.to_owned()))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// The owner of the API key `api_key`, if it exists.
