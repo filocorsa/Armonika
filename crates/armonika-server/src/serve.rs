@@ -49,6 +49,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 async fn bootstrap_admin(db: &Db, secrets: &SecretBox) -> anyhow::Result<()> {
     let name = env_value("ARMONIKA_ADMIN_USER");
     let password = env_value("ARMONIKA_ADMIN_PASSWORD");
+    let env_set = name.is_some() || password.is_some();
     let secrets = secrets.clone();
     let requested = name.clone();
     let outcome = db
@@ -61,23 +62,34 @@ async fn bootstrap_admin(db: &Db, secrets: &SecretBox) -> anyhow::Result<()> {
                 "created the admin from ARMONIKA_ADMIN_USER and ARMONIKA_ADMIN_PASSWORD"
             );
         }
+        Ok(BootstrapOutcome::AdminExists) if env_set => {
+            tracing::info!(
+                "ARMONIKA_ADMIN_USER or ARMONIKA_ADMIN_PASSWORD is set but ignored because an \
+                 admin already exists; to change a password run \
+                 `armonika user set-password <name>`"
+            );
+        }
         Ok(BootstrapOutcome::AdminExists) => {
-            tracing::debug!("an admin exists; ARMONIKA_ADMIN_USER is not used");
+            tracing::debug!("an admin exists");
         }
         Ok(BootstrapOutcome::MissingCredentials) => {
             tracing::warn!(
-                "no admin exists: set ARMONIKA_ADMIN_USER and ARMONIKA_ADMIN_PASSWORD and                  restart, or run `armonika user create <name> --admin`"
+                "no admin exists: set ARMONIKA_ADMIN_USER and ARMONIKA_ADMIN_PASSWORD and \
+                 restart, or run `armonika user create <name> --admin`"
             );
         }
         Err(Error::UserExists(user)) => {
             tracing::error!(
                 user,
-                "cannot create the admin from ARMONIKA_ADMIN_USER: a user with this name                  exists and is not an admin. Choose another name, or make that user an                  admin with `armonika user set <name> --admin true`"
+                "cannot create the admin from ARMONIKA_ADMIN_USER: a user with this name \
+                 exists and is not an admin. Choose another name, or make that user an \
+                 admin with `armonika user set <name> --admin true`"
             );
         }
         Err(e @ (Error::PasswordTooShort { .. } | Error::InvalidUserName(_))) => {
             tracing::error!(
-                "cannot create the admin from ARMONIKA_ADMIN_USER and                  ARMONIKA_ADMIN_PASSWORD: {e}"
+                "cannot create the admin from ARMONIKA_ADMIN_USER and \
+                 ARMONIKA_ADMIN_PASSWORD: {e}"
             );
         }
         Err(e) => return Err(e).context("cannot create the admin"),

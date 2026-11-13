@@ -235,6 +235,16 @@ fn serve_bootstraps_admin_and_syncs_libraries() {
     let (answered, log) = serve_once(dir.path(), &[]);
     assert!(answered, "{log}");
     assert!(log.contains("ARMONIKA_ADMIN_USER"), "{log}");
+    assert_single_spaced(&log, "no admin exists");
+    // The library created from the configuration is logged with its path.
+    let created = log
+        .lines()
+        .find(|l| l.contains("created library \"Main\""))
+        .expect(&log);
+    assert!(
+        created.contains("INFO") && created.contains("music"),
+        "{log}"
+    );
 
     let password = "root-secret-password";
     let (answered, log) = serve_once(
@@ -247,6 +257,7 @@ fn serve_bootstraps_admin_and_syncs_libraries() {
     assert!(answered, "{log}");
     assert!(log.contains("created the admin"), "{log}");
     assert!(!log.contains(password), "{log}");
+    assert!(!log.contains("created library"), "{log}");
 
     let (_, out, _) = armonika(dir.path(), &["user", "list"], "");
     let root = out.lines().find(|l| l.contains("root")).expect(&out);
@@ -261,9 +272,26 @@ fn serve_bootstraps_admin_and_syncs_libraries() {
         format!("[[library]]\nname = \"Main\"\npath = '{moved}'\n"),
     )
     .unwrap();
-    let (answered, log) = serve_once(dir.path(), &[]);
+    // Admin variables set while an admin exists are ignored, said at info level.
+    let (answered, log) = serve_once(
+        dir.path(),
+        &[
+            ("ARMONIKA_ADMIN_USER", "other-admin-name"),
+            ("ARMONIKA_ADMIN_PASSWORD", password),
+        ],
+    );
     assert!(answered, "{log}");
     assert!(log.contains("WARN") && log.contains("Main"), "{log}");
+    let ignored = log.lines().find(|l| l.contains("ignored")).expect(&log);
+    assert!(
+        ignored.contains("INFO") && ignored.contains("armonika user set-password"),
+        "{log}"
+    );
+    assert_single_spaced(&log, "ARMONIKA_ADMIN_USER or");
+    assert!(
+        !log.contains(password) && !log.contains("other-admin-name"),
+        "{log}"
+    );
     let (_, out, _) = armonika(dir.path(), &["library", "list"], "");
     let main = out.lines().find(|l| l.contains("Main")).expect(&out);
     assert!(main.contains("music") && !main.contains("moved"), "{out}");
@@ -291,4 +319,28 @@ fn serve_keeps_running_when_admin_name_is_taken() {
         "{log}"
     );
     assert!(!log.contains("another-password"), "{log}");
+    assert_single_spaced(&log, "cannot create the admin");
+
+    let (answered, log) = serve_once(
+        dir.path(),
+        &[
+            ("ARMONIKA_ADMIN_USER", "boss"),
+            ("ARMONIKA_ADMIN_PASSWORD", "sh0rt"),
+        ],
+    );
+    assert!(answered, "{log}");
+    assert!(log.contains("ERROR") && log.contains("at least"), "{log}");
+    assert!(!log.contains("sh0rt"), "{log}");
+    assert_single_spaced(&log, "cannot create the admin");
+}
+
+/// The log line holding `start` has no run of spaces from `start` to its end (the
+/// formatter pads the level before it).
+fn assert_single_spaced(log: &str, start: &str) {
+    let line = log.lines().find(|l| l.contains(start)).expect(log);
+    let message = &line[line.find(start).unwrap()..];
+    assert!(
+        !message.contains("  "),
+        "two consecutive spaces in {message:?}"
+    );
 }

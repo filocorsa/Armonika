@@ -65,21 +65,31 @@ fn user_create_then_list() {
 #[test]
 fn password_never_in_output() {
     let dir = tempfile::tempdir().unwrap();
-    let secrets = ["first-secret-pw", "second-secret-pw", "subsonic-secret-pw"];
-    let runs: Vec<(Vec<&str>, &str)> = vec![
+    let secrets = [
+        "first-secret-pw",
+        "second-secret-pw",
+        "subsonic-secret-pw",
+        "sh0rt",
+        "x-secret-pw",
+    ];
+    // (arguments, stdin, expected to succeed)
+    let runs: Vec<(Vec<&str>, &str, bool)> = vec![
         (
             vec!["user", "create", "carol", "--password-stdin"],
             "first-secret-pw\n",
+            true,
         ),
         (
             vec!["user", "set-password", "carol", "--password-stdin"],
             "second-secret-pw\n",
+            true,
         ),
         (
             vec!["user", "set-subsonic-password", "carol", "--password-stdin"],
             "subsonic-secret-pw\n",
+            true,
         ),
-        (vec!["user", "list"], ""),
+        (vec!["user", "list"], "", true),
         (
             vec![
                 "user",
@@ -91,22 +101,31 @@ fn password_never_in_output() {
                 "true",
             ],
             "",
+            true,
         ),
+        // Too short: refused.
         (
             vec!["user", "create", "dave", "--password-stdin"],
-            "short\n",
+            "sh0rt\n",
+            false,
+        ),
+        // No password can be given as an argument.
+        (
+            vec!["user", "create", "erin", "--password", "x-secret-pw"],
+            "",
+            false,
         ),
     ];
-    for (args, stdin) in &runs {
-        let (_, out, err) = armonika(dir.path(), args, stdin);
-        for s in secrets.iter().chain(["Xq7zzw"].iter()) {
+    for (args, stdin, expect_ok) in &runs {
+        let (ok, out, err) = armonika(dir.path(), args, stdin);
+        assert_eq!(ok, *expect_ok, "{args:?}: {out}{err}");
+        for s in secrets {
             assert!(!out.contains(s), "{args:?} printed a password: {out}");
             assert!(!err.contains(s), "{args:?} printed a password: {err}");
         }
     }
-    // The too-short password was refused.
     let (_, out, _) = armonika(dir.path(), &["user", "list"], "");
-    assert!(!out.contains("dave"), "{out}");
+    assert!(!out.contains("dave") && !out.contains("erin"), "{out}");
     assert!(
         out.contains("no-download") && out.contains("share-now-playing"),
         "{out}"
@@ -127,12 +146,4 @@ fn password_never_in_output() {
     );
     assert!(ok, "{out}{err}");
     assert!(!out.contains(key.trim()));
-
-    // No password can be given as an argument.
-    let (ok, _, _) = armonika(
-        dir.path(),
-        &["user", "create", "erin", "--password", "x-secret-pw"],
-        "",
-    );
-    assert!(!ok);
 }
