@@ -11,11 +11,22 @@ name = "armonika"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.104"
 armonika-core = { path = "../armonika-core" }
+axum = "0.8.9"
 clap = { version = "4", features = ["derive"] }
+figment = { version = "0.10.19", features = ["toml", "env"] }
+humantime-serde = "1.1.1"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+figment = { version = "0.10.19", features = ["test"] }
+tempfile = "3.27.0"
+ureq = "3.5.2"
 
 [lints]
 workspace = true
