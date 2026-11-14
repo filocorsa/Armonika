@@ -9,6 +9,7 @@ pub mod ids;
 pub mod libraries;
 pub mod model;
 pub mod paths;
+pub mod search_source;
 pub mod secret;
 pub mod text;
 pub mod track_files;

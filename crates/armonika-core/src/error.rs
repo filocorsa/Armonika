@@ -30,6 +30,9 @@ pub enum Error {
         "database schema version {0} is invalid (negative); the file was not written by Armonika or is damaged"
     )]
     InvalidSchemaVersion(i64),
+    /// The search index failed (opening, writing or querying it); holds the message.
+    #[error("search index error: {0}")]
+    Search(String),
     /// A string is not a valid public identifier of the expected kind.
     #[error("invalid identifier {0:?}")]
     InvalidId(String),

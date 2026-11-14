@@ -4,6 +4,8 @@
 //! libraries of the configuration file that do not exist yet. It then starts the scan
 //! controller: a scan of every library, folder watching and periodic rescans.
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use axum::Router;
 use axum::routing::get;
@@ -15,6 +17,7 @@ use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, BootstrapOutcome};
 use armonika_scanner::controller::ScanController;
 use armonika_scanner::{ScanOptions, watch};
+use armonika_search::{SearchIndex, TantivyIndex, updater};
 
 use crate::config::Config;
 
@@ -49,13 +52,28 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 }
 
 /// Starts the scan controller, asks for a scan of every library and starts the folder
-/// watchers and the periodic rescan. The changes the scans report are dropped for now.
+/// watchers and the periodic rescan. The changes the scans report go to the search
+/// index updater, which first rebuilds the index if it is missing or outdated.
 async fn start_scanning(
     db: &Db,
     config: &Config,
 ) -> anyhow::Result<(ScanController, watch::WatchHandle)> {
-    let (changes, mut unused) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(async move { while unused.recv().await.is_some() {} });
+    let (changes, rx) = tokio::sync::mpsc::unbounded_channel();
+    let search_dir = config.data_dir.join("search");
+    let index = tokio::task::spawn_blocking(move || TantivyIndex::open(&search_dir))
+        .await
+        .context("search index task failed")?
+        .context("cannot open the search index")?;
+    let created = index.was_created();
+    let index: Arc<dyn SearchIndex> = Arc::new(index);
+    let search_db = db.clone();
+    tokio::spawn(async move {
+        if let Err(e) = updater::rebuild_if_needed(search_db.clone(), index.clone(), created).await
+        {
+            tracing::error!(error = %e, "cannot rebuild the search index");
+        }
+        updater::run(search_db, index, rx).await;
+    });
     let defaults = ScanOptions::default();
     let opts = ScanOptions {
         threads: config.scan.threads.max(1),

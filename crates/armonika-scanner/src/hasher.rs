@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use armonika_core::albums::{reconcile_albums, track_album};
-use armonika_core::artists::{reconcile_artists, track_artist_ids};
+use armonika_core::albums::track_album;
+use armonika_core::artists::track_artist_ids;
 use armonika_core::db::{Connection, Db, Transaction, now_ms};
 use armonika_core::ids::{LibraryId, TrackId, add_redirect};
 use armonika_core::libraries;
@@ -575,7 +575,7 @@ fn apply(
                 link_new(tx, library, &fresh, &facts.tags, change)?;
             }
             change.hidden.insert(job.id.clone());
-            reconcile(tx, library, change)?;
+            change.reconcile(tx, library)?;
         }
         (Plan::Merge { target }, Some(facts)) => {
             let kept: TrackId = tx
@@ -598,7 +598,7 @@ fn apply(
                 change,
             )?;
             store_hash(tx, target, hash)?;
-            reconcile(tx, library, change)?;
+            change.reconcile(tx, library)?;
         }
         (Plan::Merge { .. }, None) => return Ok(Outcome::Skipped),
     }
@@ -614,17 +614,6 @@ fn store_hash(tx: &Transaction<'_>, key: i64, hash: &[u8; 32]) -> armonika_core:
     )?
     .execute(params![key, hash.as_slice()])?;
     Ok(())
-}
-
-/// Brings artists and albums in line after the tracks moved, as the end of a scan does.
-fn reconcile(
-    tx: &Transaction<'_>,
-    library: LibraryId,
-    change: &mut Change,
-) -> armonika_core::Result<()> {
-    change.artists.extend(reconcile_artists(tx, library)?);
-    change.albums.extend(reconcile_albums(tx, library)?);
-    change.add_album_artists(tx)
 }
 
 /// Moves what users keep about the track `from` onto the track `to`, which is kept

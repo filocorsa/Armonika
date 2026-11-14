@@ -23,7 +23,7 @@ use std::time::Instant;
 use armonika_core::Error;
 use armonika_core::albums::{
     album_artist_ids, album_credit, assign_album, folder_has_mixed_artists, group_key,
-    reconcile_albums, track_album,
+    linked_artist_ids, reconcile_albums, track_album,
 };
 use armonika_core::artists::{
     link_track_artists, reconcile_artists, split_credit, track_artist_ids,
@@ -145,9 +145,7 @@ pub(crate) fn scan(
         }
         mark_missing(&tx, &hidden)?;
         change.hidden.extend(hidden.iter().cloned());
-        change.artists.extend(reconcile_artists(&tx, library)?);
-        change.albums.extend(reconcile_albums(&tx, library)?);
-        change.add_album_artists(&tx)?;
+        change.reconcile(&tx, library)?;
         tx.commit()?;
         Ok(())
     })?;
@@ -430,6 +428,22 @@ impl Change {
             self.artists.extend(album_artist_ids(tx, album)?);
         }
         Ok(())
+    }
+
+    /// Brings artists and albums in line after the tracks moved, as the end of a scan
+    /// does. Artists that left an album credit are reported too: their album lists
+    /// changed and `add_album_artists` only sees the credits that remain.
+    pub(crate) fn reconcile(
+        &mut self,
+        tx: &Transaction<'_>,
+        library: LibraryId,
+    ) -> armonika_core::Result<()> {
+        self.artists.extend(reconcile_artists(tx, library)?);
+        let before = linked_artist_ids(tx, library)?;
+        self.albums.extend(reconcile_albums(tx, library)?);
+        let after = linked_artist_ids(tx, library)?;
+        self.artists.extend(before.difference(&after).cloned());
+        self.add_album_artists(tx)
     }
 
     pub(crate) fn emit(self, library: LibraryId, changes: &dyn Fn(LibraryChange)) {
