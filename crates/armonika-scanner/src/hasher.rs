@@ -15,13 +15,14 @@
 //!    sees it change (the scan makes it `pending` then).
 //!
 //! The work pauses for the libraries named by [`HasherHandle::pause`], which the scan
-//! controller does while it scans them. Files are only read.
+//! controller does while it scans them: `pause` returns when the hasher is no longer
+//! working on a track of that library. Files are only read.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use armonika_core::albums::{reconcile_albums, track_album};
@@ -64,11 +65,33 @@ pub struct HashReport {
     pub skipped: u64,
 }
 
+/// What the hasher and the scan controller share.
+#[derive(Debug, Default)]
+struct Shared {
+    state: Mutex<State>,
+    /// Signalled when the hasher finishes a track.
+    idle: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    paused: HashSet<LibraryId>,
+    /// The library of the track being hashed now.
+    busy: Option<LibraryId>,
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, State> {
+        // A set of ids stays valid whatever a panicking holder was doing.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// The background hasher. Create it once, give [`Hasher::handle`] to whoever scans, and
 /// run [`Hasher::run`] on a thread of its own.
 #[derive(Clone, Debug)]
 pub struct Hasher {
-    paused: Arc<Mutex<HashSet<LibraryId>>>,
+    shared: Arc<Shared>,
     /// Reads the tags of a file when a relink needs them (replaced in tests).
     reader: Reader,
 }
@@ -78,7 +101,7 @@ type Reader = fn(&Path) -> Result<FileFacts, String>;
 impl Default for Hasher {
     fn default() -> Hasher {
         Hasher {
-            paused: Arc::default(),
+            shared: Arc::default(),
             reader: read_isolated,
         }
     }
@@ -87,29 +110,55 @@ impl Default for Hasher {
 /// Pauses and resumes the hashing of a library, from another thread.
 #[derive(Clone, Debug)]
 pub struct HasherHandle {
-    paused: Arc<Mutex<HashSet<LibraryId>>>,
+    shared: Arc<Shared>,
 }
 
 impl HasherHandle {
     /// No track of `library` is hashed until [`HasherHandle::resume`]. A track being
-    /// hashed finishes first.
+    /// hashed finishes first: this call waits for it, so when it returns the hasher is
+    /// not touching the library. Do not call it from the hasher's own thread.
     pub fn pause(&self, library: LibraryId) {
-        lock(&self.paused).insert(library);
+        let mut state = self.shared.lock();
+        state.paused.insert(library);
+        while state.busy == Some(library) {
+            state = self
+                .shared
+                .idle
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// Hashing of `library` goes on.
     pub fn resume(&self, library: LibraryId) {
-        lock(&self.paused).remove(&library);
+        self.shared.lock().paused.remove(&library);
     }
 
     pub fn is_paused(&self, library: LibraryId) -> bool {
-        lock(&self.paused).contains(&library)
+        self.shared.lock().paused.contains(&library)
     }
 }
 
-fn lock(paused: &Mutex<HashSet<LibraryId>>) -> std::sync::MutexGuard<'_, HashSet<LibraryId>> {
-    // A set of ids stays valid whatever a panicking holder was doing.
-    paused.lock().unwrap_or_else(PoisonError::into_inner)
+/// Marks a library busy for as long as it lives, also when the hashing panics.
+struct Busy<'a>(&'a Shared);
+
+impl<'a> Busy<'a> {
+    /// `None` if `library` is paused.
+    fn enter(shared: &'a Shared, library: LibraryId) -> Option<Busy<'a>> {
+        let mut state = shared.lock();
+        if state.paused.contains(&library) {
+            return None;
+        }
+        state.busy = Some(library);
+        Some(Busy(shared))
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.lock().busy = None;
+        self.0.idle.notify_all();
+    }
 }
 
 /// A present track waiting for its hash.
@@ -150,7 +199,7 @@ impl Hasher {
 
     pub fn handle(&self) -> HasherHandle {
         HasherHandle {
-            paused: Arc::clone(&self.paused),
+            shared: Arc::clone(&self.shared),
         }
     }
 
@@ -192,7 +241,7 @@ impl Hasher {
         let mut report = HashReport::default();
         let mut last = 0;
         while !stop.is_cancelled() {
-            let paused: Vec<LibraryId> = lock(&self.paused).iter().copied().collect();
+            let paused: Vec<LibraryId> = self.shared.lock().paused.iter().copied().collect();
             let batch = match db.read_blocking(|c| pending_batch(c, last, &paused)) {
                 Ok(batch) => batch,
                 Err(err) => {
@@ -209,9 +258,10 @@ impl Hasher {
                 if stop.is_cancelled() {
                     break;
                 }
-                if lock(&self.paused).contains(&job.library) {
+                // Held until the track is done: a pause waits for it.
+                let Some(_busy) = Busy::enter(&self.shared, job.library) else {
                     continue;
-                }
+                };
                 let root = roots.entry(job.library).or_insert_with(|| {
                     db.read_blocking(|c| libraries::get(c, job.library))
                         .ok()
@@ -734,6 +784,109 @@ mod tests {
 
         // The next scan reads the file as a new one.
         assert_eq!(scan().new, 1);
+    }
+
+    /// The reader of `pause_waits_for_the_track_in_flight`: says it was entered and
+    /// waits for the test to let it go.
+    static GATE: (Mutex<(bool, bool)>, Condvar) = (Mutex::new((false, false)), Condvar::new());
+
+    fn gated_reader(path: &Path) -> Result<FileFacts, String> {
+        let (lock, cv) = &GATE;
+        let mut gate = lock.lock().unwrap();
+        gate.0 = true;
+        cv.notify_all();
+        while !gate.1 {
+            gate = cv.wait(gate).unwrap();
+        }
+        drop(gate);
+        read_isolated(path)
+    }
+
+    #[test]
+    fn pause_waits_for_the_track_in_flight() {
+        use armonika_core::libraries;
+        use armonika_testdata::AudioFormat;
+        use armonika_testdata::fixture::{FixtureTags, tagged_file};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let data = tempfile::tempdir().unwrap();
+        let music = tempfile::tempdir().unwrap();
+        let db = Db::open(&data.path().join("armonika.db")).unwrap();
+        let lib = db
+            .write_blocking(|c| libraries::create(c, "Music", music.path(), data.path()))
+            .unwrap();
+        let scan = || {
+            crate::scan_library(&db, lib, crate::ScanOptions::default(), &|_| {}, &|_| {}).unwrap()
+        };
+        let tags = |title: &str| FixtureTags {
+            title: Some(title.to_owned()),
+            ..FixtureTags::default()
+        };
+        let set_mtime = |path: &Path, secs: u64| {
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+                .unwrap();
+        };
+        // The same audio at a new path with other tags and another date: the hash
+        // merges the new track into the missing one, which needs the gated reader.
+        let a = tagged_file(music.path(), "a.mp3", AudioFormat::Mp3, &tags("Song"));
+        set_mtime(&a, 1_600_000_000);
+        scan();
+        let hasher = Hasher::new();
+        let stop = CancellationToken::new();
+        hasher.hash_pending(&db, &stop, &|_| {});
+        fs::remove_file(&a).unwrap();
+        let b = tagged_file(
+            music.path(),
+            "b.mp3",
+            AudioFormat::Mp3,
+            &tags("Song, retagged"),
+        );
+        set_mtime(&b, 1_700_000_000);
+        scan();
+
+        let hasher = Hasher {
+            reader: gated_reader,
+            ..hasher
+        };
+        let handle = hasher.handle();
+        let worker = {
+            let (db, stop) = (db.clone(), stop.clone());
+            std::thread::spawn(move || hasher.hash_pending(&db, &stop, &|_| {}))
+        };
+        let (lock, cv) = &GATE;
+        {
+            let mut gate = lock.lock().unwrap();
+            while !gate.0 {
+                gate = cv.wait(gate).unwrap();
+            }
+        }
+        // The hasher is inside the track: pause must not return before it is done.
+        let paused = Arc::new(AtomicBool::new(false));
+        let pauser = {
+            let (handle, paused) = (handle.clone(), Arc::clone(&paused));
+            std::thread::spawn(move || {
+                handle.pause(lib);
+                paused.store(true, Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !paused.load(Ordering::SeqCst),
+            "pause returned during a track"
+        );
+        assert!(handle.is_paused(lib));
+        {
+            lock.lock().unwrap().1 = true;
+            cv.notify_all();
+        }
+        pauser.join().unwrap();
+        let report = worker.join().unwrap();
+        assert_eq!(report.merged, 1, "{report:?}");
+        assert!(paused.load(Ordering::SeqCst));
     }
 
     #[test]

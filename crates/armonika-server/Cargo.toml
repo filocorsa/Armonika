@@ -13,13 +13,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 armonika-core = { path = "../armonika-core" }
+armonika-scanner = { path = "../armonika-scanner" }
 axum = "0.8.9"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
+humantime = "2.4.0"
 humantime-serde = "1.1.1"
 rpassword = "7.5.5"
+rusqlite = "0.41.1"
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 

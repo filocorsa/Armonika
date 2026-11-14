@@ -12,9 +12,13 @@ workspace = true
 [dependencies]
 armonika-core = { path = "../armonika-core" }
 armonika-media = { path = "../armonika-media" }
+notify = "8.2.2"
+notify-debouncer-full = "0.7.0"
 rayon = "1.12.0"
 rusqlite = "0.41.1"
 thiserror = "2.0.21"
+thread-priority = "3.1.1"
+tokio = { version = "1.54.1", features = ["sync"] }
 tokio-util = "0.7.20"
 tracing = "0.1.44"
 walkdir = "2.5.0"

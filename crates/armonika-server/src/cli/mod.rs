@@ -2,6 +2,7 @@
 //! server.
 
 pub mod library;
+pub mod track;
 pub mod user;
 
 use anyhow::Context;

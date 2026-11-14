@@ -6,7 +6,8 @@
 //! written. A file keeps its track when it is unchanged, when its tags change, when
 //! it is renamed or moved (pre-filter on size, modification time and duration), and
 //! when it disappears and comes back; a track whose file disappears becomes missing
-//! and keeps its personal data.
+//! and keeps its personal data. [`controller::ScanController`] runs scans on request,
+//! [`watch`] asks it for them when the folders change and on a timer.
 
 use std::io;
 use std::path::PathBuf;
@@ -16,9 +17,11 @@ use armonika_core::db::Db;
 use armonika_core::ids::LibraryId;
 pub use armonika_core::model::LibraryChange;
 
+pub mod controller;
 pub mod hasher;
 mod reconcile;
 mod walk;
+pub mod watch;
 
 /// How a scan runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
