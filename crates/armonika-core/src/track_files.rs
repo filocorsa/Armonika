@@ -11,6 +11,7 @@ use rusqlite::{Connection, Transaction, params};
 use crate::db::now_ms;
 use crate::ids::{LibraryId, TrackId, resolve_track};
 use crate::model::{AudioFormat, FileFacts, PartialDate};
+use crate::text::normalize;
 use crate::{Error, Result};
 
 /// What the database knows about the file of a track.
@@ -183,7 +184,9 @@ fn write_columns(
            orig_date_y = ?29, orig_date_m = ?30, orig_date_d = ?31,
            compilation = ?32, has_embedded_cover = ?33,
            mb_recording_id = ?34, mb_release_track_id = ?35, mb_release_id = ?36,
-           mb_release_group_id = ?37, mb_work_id = ?38, updated_at = ?39
+           mb_release_group_id = ?37, mb_work_id = ?38, updated_at = ?39,
+           artists_tag = ?40, album_artists_tag = ?41, mb_artist_ids = ?42,
+           mb_album_artist_ids = ?43, album_title_norm = ?44
          WHERE id = ?1",
     )?
     .execute(params![
@@ -228,6 +231,11 @@ fn write_columns(
         t.mb_release_group_id,
         t.mb_work_id,
         now,
+        join_values(&t.artists),
+        join_values(&t.album_artists),
+        join_values(&t.mb_artist_ids),
+        join_values(&t.mb_album_artist_ids),
+        t.album_title.as_deref().map(normalize),
     ])?;
     tx.prepare_cached("DELETE FROM track_genres WHERE track_id = ?1")?
         .execute([key])?;
@@ -237,6 +245,27 @@ fn write_columns(
         insert.execute(params![key, genre])?;
     }
     Ok(())
+}
+
+/// Separator of the values of a multi-value tag in its text column (U+001F, the ASCII
+/// unit separator, which no tag value contains).
+const VALUE_SEPARATOR: char = '\u{1f}';
+
+/// The values of a multi-value tag as stored in its column: joined by
+/// [`VALUE_SEPARATOR`], `None` when there are none.
+fn join_values(values: &[String]) -> Option<String> {
+    let joined = values.join(&VALUE_SEPARATOR.to_string());
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// The values of a multi-value tag column written by [`join_values`].
+pub(crate) fn split_values(column: Option<&str>) -> Vec<String> {
+    column.map_or_else(Vec::new, |c| {
+        c.split(VALUE_SEPARATOR)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 fn date_parts(date: Option<PartialDate>) -> (Option<i32>, Option<u8>, Option<u8>) {

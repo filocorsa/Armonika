@@ -52,7 +52,7 @@ fn open_applies_migrations_once() {
             Ok((version, tables))
         })
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert_eq!(tables, 1);
 }
 
@@ -81,7 +81,7 @@ fn concurrent_open_applies_migrations_once() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 }
 
@@ -103,6 +103,40 @@ fn migration_2_adds_artist_links() {
             |r| r.get(0),
         )?;
         assert_eq!(n, 1);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn migration_3_adds_album_dates_and_tag_lists() {
+    let (_dir, db) = open_temp();
+    db.read_blocking(|c| {
+        let columns = |table: &str| -> rusqlite::Result<Vec<String>> {
+            let mut stmt = c.prepare("SELECT name FROM pragma_table_info(?1)")?;
+            stmt.query_map([table], |r| r.get(0))?.collect()
+        };
+        let albums = columns("library_albums")?;
+        for col in [
+            "date_y",
+            "date_m",
+            "date_d",
+            "orig_date_y",
+            "orig_date_m",
+            "orig_date_d",
+        ] {
+            assert!(albums.iter().any(|c| c == col), "library_albums.{col}");
+        }
+        let tracks = columns("tracks")?;
+        for col in [
+            "artists_tag",
+            "album_artists_tag",
+            "mb_artist_ids",
+            "mb_album_artist_ids",
+            "album_title_norm",
+        ] {
+            assert!(tracks.iter().any(|c| c == col), "tracks.{col}");
+        }
         Ok(())
     })
     .unwrap();

@@ -203,7 +203,7 @@ fn first_scan_creates_tracks() {
     assert_eq!(row.hash_state, "pending");
     assert_eq!(row.content_hash, None);
     assert_eq!(row.tag_schema, i64::from(TAG_SCHEMA_VERSION));
-    assert_eq!(row.library_album_id, None, "albums come with Task 8");
+    assert!(row.library_album_id.is_some(), "every track has an album");
     // "Queen feat. David Bowie" is split into two artists on every track.
     assert_eq!(lib.count("SELECT count(*) FROM track_artists"), 6);
     assert_eq!(lib.count("SELECT count(*) FROM artists"), 2);

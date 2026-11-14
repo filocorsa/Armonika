@@ -21,6 +21,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use armonika_core::Error;
+use armonika_core::albums::{
+    album_artist_ids, album_credit, assign_album, folder_has_mixed_artists, group_key,
+    reconcile_albums, track_album,
+};
 use armonika_core::artists::{
     link_track_artists, reconcile_artists, split_credit, track_artist_ids,
 };
@@ -121,6 +125,7 @@ pub(crate) fn scan(
                     &mut change,
                 )?;
             }
+            change.add_album_artists(&tx)?;
             tx.commit()?;
             Ok(())
         })?;
@@ -136,11 +141,13 @@ pub(crate) fn scan(
         let tx = conn.transaction()?;
         for id in &hidden {
             change.artists.extend(track_artist_ids(&tx, id)?);
+            change.albums.extend(track_album(&tx, id)?);
         }
         mark_missing(&tx, &hidden)?;
         change.hidden.extend(hidden.iter().cloned());
-        // Albums (Task 8) are reconciled after the artists.
         change.artists.extend(reconcile_artists(&tx, library)?);
+        change.albums.extend(reconcile_albums(&tx, library)?);
+        change.add_album_artists(&tx)?;
         tx.commit()?;
         Ok(())
     })?;
@@ -417,6 +424,14 @@ struct Change {
 }
 
 impl Change {
+    /// Adds the artists of the albums touched so far: their album lists changed.
+    fn add_album_artists(&mut self, tx: &Transaction<'_>) -> armonika_core::Result<()> {
+        for album in &self.albums {
+            self.artists.extend(album_artist_ids(tx, album)?);
+        }
+        Ok(())
+    }
+
     fn emit(self, library: LibraryId, changes: &dyn Fn(LibraryChange)) {
         let event = LibraryChange {
             library,
@@ -468,7 +483,7 @@ fn apply(
             } else {
                 ContentChange::Changed
             };
-            write_track(tx, id, rel, &facts, content, change)?;
+            write_track(tx, library, id, rel, &facts, content, change)?;
             report.changed += 1;
         }
         (Action::CaseRename { id }, _) => {
@@ -482,17 +497,25 @@ fn apply(
             report.reappeared += 1;
         }
         (Action::Reappear { id, .. }, Some(facts)) => {
-            write_track(tx, id, rel, &facts, ContentChange::Changed, change)?;
+            write_track(tx, library, id, rel, &facts, ContentChange::Changed, change)?;
             report.reappeared += 1;
         }
         (Action::Unknown, Some(facts)) => match matcher.prefilter(&facts) {
             Some(id) => {
-                write_track(tx, &id, rel, &facts, ContentChange::Relinked, change)?;
+                write_track(
+                    tx,
+                    library,
+                    &id,
+                    rel,
+                    &facts,
+                    ContentChange::Relinked,
+                    change,
+                )?;
                 report.relinked_prefilter += 1;
             }
             None => {
                 let id = insert_track(tx, library, rel, &facts, TAG_SCHEMA_VERSION)?;
-                link_new(tx, &id, &facts.tags, change)?;
+                link_new(tx, library, &id, &facts.tags, change)?;
                 report.new += 1;
             }
         },
@@ -506,6 +529,7 @@ fn apply(
 /// Writes `facts` into the existing track `id` at `rel` and relinks its artists.
 fn write_track(
     tx: &Transaction<'_>,
+    library: LibraryId,
     id: &TrackId,
     rel: &str,
     facts: &FileFacts,
@@ -515,12 +539,13 @@ fn write_track(
     // The artists it had lose a track if the credit changed.
     change.artists.extend(track_artist_ids(tx, id)?);
     write_file(tx, id, rel, facts, TAG_SCHEMA_VERSION, content)?;
-    link_new(tx, id, &facts.tags, change)
+    link_new(tx, library, id, &facts.tags, change)
 }
 
 /// Links the artists and the album of a track whose tags were just written.
 fn link_new(
     tx: &Transaction<'_>,
+    library: LibraryId,
     id: &TrackId,
     tags: &TagFacts,
     change: &mut Change,
@@ -530,38 +555,28 @@ fn link_new(
         &tags.artists,
         &tags.mb_artist_ids,
     );
-    change.artists.extend(link_track_artists(
-        tx,
-        id,
-        &credit,
-        tags.artist_sort.as_deref(),
-    )?);
+    let artists = link_track_artists(tx, id, &credit, tags.artist_sort.as_deref())?;
+    let mixed = folder_has_mixed_artists(tx, library, id)?;
+    let key = group_key(tags, &album_credit(tags, mixed), artists.first());
+    change.artists.extend(artists);
     change
         .albums
-        .extend(assign_album_placeholder(tx, id, tags)?);
+        .insert(assign_album(tx, library, id, &key, tags)?);
     change.upserted.insert(id.clone());
     Ok(())
 }
 
-/// A track that became present again without reading its file: its artists show it again.
+/// A track that became present again without reading its file: its artists and its
+/// album show it again.
 fn touch_existing(
     tx: &Transaction<'_>,
     id: &TrackId,
     change: &mut Change,
 ) -> armonika_core::Result<()> {
     change.artists.extend(track_artist_ids(tx, id)?);
+    change.albums.extend(track_album(tx, id)?);
     change.upserted.insert(id.clone());
     Ok(())
-}
-
-/// Placeholder for `assign_album` (Task 8): leaves `library_album_id` NULL and touches
-/// no album. Task 8 replaces this function with the real grouping.
-fn assign_album_placeholder(
-    _tx: &Transaction<'_>,
-    _track: &TrackId,
-    _tags: &TagFacts,
-) -> armonika_core::Result<Option<LibraryAlbumId>> {
-    Ok(None)
 }
 
 #[cfg(test)]
