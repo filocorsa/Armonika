@@ -4,6 +4,7 @@ mod auth;
 mod browse;
 mod error;
 mod response;
+mod search;
 mod system;
 
 use std::path::PathBuf;
@@ -172,6 +173,8 @@ async fn dispatch(state: &AppState, method: &str, params: &Params) -> Result<Pay
         "getAlbumList" => browse::get_album_list(state, &access, params).await,
         "getRandomSongs" => browse::get_random_songs(state, &access, params).await,
         "getSongsByGenre" => browse::get_songs_by_genre(state, &access, params).await,
+        "search3" => search::search(state, &access, params, "searchResult3").await,
+        "search2" => search::search(state, &access, params, "searchResult2").await,
         "getArtistInfo2" => browse::get_artist_info2(params),
         "getAlbumInfo2" => browse::get_album_info2(params),
         "getTopSongs" => Ok(browse::get_top_songs()),

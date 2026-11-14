@@ -539,6 +539,161 @@ pub fn all_tracks_page(
     )
 }
 
+/// `?1, ?2, ...` for `n` binds.
+fn numbered_placeholders(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Puts `items` in the order of `ids` (by `key`), dropping the ones not asked for.
+fn in_order<T, K: PartialEq>(ids: &[K], mut items: Vec<T>, key: impl Fn(&T) -> &K) -> Vec<T> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(pos) = items.iter().position(|i| key(i) == id) {
+            out.push(items.swap_remove(pos));
+        }
+    }
+    out
+}
+
+/// The tracks `ids` the scope can see, in the order of `ids`. Others are left out.
+pub fn tracks_by_ids(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    ids: &[TrackId],
+) -> Result<Vec<TrackView>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let texts: Vec<&str> = ids.iter().map(TrackId::as_str).collect();
+    let binds: Vec<&dyn ToSql> = texts.iter().map(|t| t as &dyn ToSql).collect();
+    let tail = format!("AND t.public_id IN ({})", numbered_placeholders(ids.len()));
+    let found = load_tracks(conn, scope, &tail, &binds)?;
+    Ok(in_order(ids, found, |t| &t.id))
+}
+
+/// The albums `ids` the scope can see, in the order of `ids`. Others are left out.
+pub fn albums_by_ids(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    ids: &[LibraryAlbumId],
+) -> Result<Vec<AlbumView>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let texts: Vec<&str> = ids.iter().map(LibraryAlbumId::as_str).collect();
+    let binds: Vec<&dyn ToSql> = texts.iter().map(|t| t as &dyn ToSql).collect();
+    let filter = format!("AND al.public_id IN ({})", numbered_placeholders(ids.len()));
+    let found = query_albums(conn, scope, &filter, "", "", &binds)?;
+    Ok(in_order(ids, found, |a| &a.id))
+}
+
+/// The artists `ids` the scope can see, in the order of `ids`. Others are left out.
+pub fn artists_by_ids(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    ids: &[ArtistId],
+) -> Result<Vec<ArtistView>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Identifiers are validated types; the quotes are doubled all the same.
+    let list = ids
+        .iter()
+        .map(|id| format!("'{}'", id.as_str().replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let found = query_artists(conn, scope, &format!("AND a.public_id IN ({list})"))?;
+    Ok(in_order(ids, found, |a| &a.id))
+}
+
+/// A page of every visible album, ordered by identifier (stable while paging).
+pub fn all_albums_page(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<AlbumView>> {
+    query_albums(
+        conn,
+        scope,
+        "",
+        "",
+        &format!("ORDER BY al.id LIMIT {limit} OFFSET {offset}"),
+        &[],
+    )
+}
+
+/// A page of every visible artist, ordered by public identifier (stable while paging).
+pub fn all_artists_page(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<ArtistView>> {
+    let mut all = query_artists(conn, scope, "")?;
+    all.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(all.into_iter().skip(offset).take(limit).collect())
+}
+
+/// How much a search result of `user` is lifted by what they did with it: `0.5` if
+/// starred plus `0.25 * ln(1 + plays)`. Albums count the plays of their tracks and
+/// artists only the star. Computed for one item, so a search pays for its candidates only.
+pub fn popularity(conn: &Connection, user: i64, item: &crate::ids::ItemRef) -> Result<f32> {
+    use crate::ids::ItemRef;
+    let (starred, plays): (bool, i64) = match item {
+        ItemRef::Track(id) => conn
+            .query_row(
+                "SELECT COALESCE(ta.starred_at IS NOT NULL, 0), COALESCE(ta.play_count, 0)
+                 FROM tracks t JOIN track_annotations ta ON ta.track_id = t.id
+                 WHERE t.public_id = ?1 AND ta.user_id = ?2",
+                rusqlite::params![id.as_str(), user],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((false, 0)),
+        ItemRef::Album(id) => {
+            let starred = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM library_albums al
+                     JOIN album_annotations aa ON aa.album_id = al.id
+                     WHERE al.public_id = ?1 AND aa.user_id = ?2 AND aa.starred_at IS NOT NULL",
+                    rusqlite::params![id.as_str(), user],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            let plays = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(ta.play_count), 0) FROM library_albums al
+                     JOIN tracks t ON t.library_album_id = al.id
+                     JOIN track_annotations ta ON ta.track_id = t.id
+                     WHERE al.public_id = ?1 AND ta.user_id = ?2",
+                    rusqlite::params![id.as_str(), user],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0);
+            (starred, plays)
+        }
+        ItemRef::Artist(id) => {
+            let starred = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM artists a
+                     JOIN artist_annotations an ON an.artist_id = a.id
+                     WHERE a.public_id = ?1 AND an.user_id = ?2 AND an.starred_at IS NOT NULL",
+                    rusqlite::params![id.as_str(), user],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            (starred, 0)
+        }
+    };
+    let plays = plays.max(0) as f32;
+    Ok(if starred { 0.5 } else { 0.0 } + 0.25 * plays.ln_1p())
+}
+
 /// Genres with the number of songs and albums, by name without regard to case.
 pub fn genres(conn: &Connection, scope: &Scope<'_>) -> Result<Vec<(String, u32, u32)>> {
     if scope.libs.is_empty() {

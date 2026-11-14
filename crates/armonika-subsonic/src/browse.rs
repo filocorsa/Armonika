@@ -25,6 +25,22 @@ const MAX_LIST: usize = 500;
 /// Items a list answers when `size` or `count` is not given.
 const DEFAULT_LIST: usize = 10;
 
+/// The libraries a request looks into: the ones the caller can reach, narrowed to the
+/// music folder `musicFolderId` if one is given (one the caller cannot reach gives none).
+pub(crate) fn request_libraries(
+    access: &Access,
+    params: &Params,
+) -> Result<Vec<LibraryId>, ApiError> {
+    let filter = match params.get("musicFolderId") {
+        Some(raw) => Some(
+            raw.parse::<LibraryId>()
+                .map_err(|_| ApiError::generic("invalid musicFolderId"))?,
+        ),
+        None => None,
+    };
+    Ok(access.visible(filter))
+}
+
 /// Runs `f` on a reader connection with the scope of the caller, narrowed to the music
 /// folder `musicFolderId` if one is given.
 async fn read<T: Send + 'static>(
@@ -33,14 +49,7 @@ async fn read<T: Send + 'static>(
     params: &Params,
     f: impl FnOnce(&Connection, &Scope<'_>) -> armonika_core::Result<T> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let filter = match params.get("musicFolderId") {
-        Some(raw) => Some(
-            raw.parse::<LibraryId>()
-                .map_err(|_| ApiError::generic("invalid musicFolderId"))?,
-        ),
-        None => None,
-    };
-    let libs = access.visible(filter);
+    let libs = request_libraries(access, params)?;
     let user = access.user.clone();
     let articles = state.ignored_articles.clone();
     Ok(state
@@ -147,7 +156,7 @@ fn annotate(m: &mut Map<String, Value>, a: &Annotations) {
     insert_opt(m, "played", a.last_played_at.map(iso8601));
 }
 
-fn track_json(t: &TrackView) -> Value {
+pub(crate) fn track_json(t: &TrackView) -> Value {
     let mut m = Map::new();
     insert(&mut m, "id", t.id.as_str());
     insert_opt(&mut m, "parent", t.album_id.as_ref().map(|a| a.as_str()));
@@ -190,7 +199,7 @@ fn track_json(t: &TrackView) -> Value {
     Value::Object(m)
 }
 
-fn album_json(a: &AlbumView) -> Value {
+pub(crate) fn album_json(a: &AlbumView) -> Value {
     let mut m = Map::new();
     insert(&mut m, "id", a.id.as_str());
     insert(&mut m, "name", a.title.as_str());
@@ -243,7 +252,7 @@ fn album_dir_json(a: &AlbumView) -> Value {
     v
 }
 
-fn artist_json(a: &ArtistView) -> Value {
+pub(crate) fn artist_json(a: &ArtistView) -> Value {
     let mut m = Map::new();
     insert(&mut m, "id", a.id.as_str());
     insert(&mut m, "name", a.name.as_str());

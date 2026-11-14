@@ -33,6 +33,7 @@ pub struct App {
     pub music_b: PathBuf,
     pub router: Router,
     pub db: Db,
+    pub search: Arc<dyn SearchIndex>,
     pub lib_a: LibraryId,
     pub lib_b: LibraryId,
     pub ann_key: String,
@@ -106,7 +107,7 @@ async fn build(with_tracks: bool) -> App {
     let state = AppState {
         db: db.clone(),
         secrets: Arc::new(secrets),
-        search,
+        search: search.clone(),
         scans,
         media: MediaConfig::default(),
         scrobbles: ScrobbleSink::default(),
@@ -120,6 +121,7 @@ async fn build(with_tracks: bool) -> App {
         music_b: dir.path().join("b"),
         router: router(state),
         db,
+        search,
         lib_a,
         lib_b,
         ann_key,
@@ -153,6 +155,13 @@ impl App {
             )
             .unwrap();
         }
+    }
+
+    /// Rebuilds the search index from the database (the scanner does not feed it here).
+    pub async fn index(&self) {
+        armonika_search::updater::rebuild(self.db.clone(), self.search.clone())
+            .await
+            .unwrap();
     }
 
     /// Runs `sql` on the writer connection.
