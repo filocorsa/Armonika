@@ -43,16 +43,22 @@ pub struct App {
 }
 
 pub async fn app() -> App {
-    build(true).await
+    build(true, MediaConfig::default()).await
 }
 
 /// Same as [`app`] but without the three tracks of library A: music comes from files
 /// written with [`App::put`] and read with [`App::scan`].
 pub async fn app_empty() -> App {
-    build(false).await
+    build(false, MediaConfig::default()).await
 }
 
-async fn build(with_tracks: bool) -> App {
+/// Same as [`app_empty`] with the given transcoding settings (the cover cache folder is
+/// set here).
+pub async fn app_with_media(media: MediaConfig) -> App {
+    build(false, media).await
+}
+
+async fn build(with_tracks: bool, media: MediaConfig) -> App {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("armonika.db")).unwrap();
     let secrets = SecretBox::from_key([9; 32]);
@@ -114,7 +120,7 @@ async fn build(with_tracks: bool) -> App {
         scans: scans.clone(),
         media: MediaConfig {
             cover_cache_dir: cache_dir.clone(),
-            ..MediaConfig::default()
+            ..media
         },
         scrobbles: ScrobbleSink::default(),
         ignored_articles: "The El La Los Las Le Les Il Lo Gli I"

@@ -7,14 +7,17 @@
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 use armonika_core::access::Access;
 use armonika_core::ids::{ItemRef, LibraryAlbumId, TrackId};
 use armonika_core::libraries;
+use armonika_core::model::AudioFormat;
 use armonika_core::paths::rel_path_from_db;
 use armonika_core::tracks::{self, Scope, TrackView};
 use armonika_media::cover;
+use armonika_media::transcode::{self, TranscodePlan};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use axum::response::Response;
@@ -66,9 +69,78 @@ pub(crate) async fn stream(
     headers: &HeaderMap,
 ) -> Result<Outcome, ApiError> {
     let located = locate(state, access, params.require("id")?).await?;
+    let max_kbps = number(params, "maxBitRate")?;
+    let offset = number(params, "timeOffset")?;
+    let plan =
+        AudioFormat::from_extension(&located.track.suffix).map_or(TranscodePlan::Raw, |source| {
+            transcode::plan(
+                source,
+                located.track.bitrate_kbps,
+                params.get("format"),
+                max_kbps,
+                (
+                    &state.media.transcode_format,
+                    state.media.transcode_bitrate_kbps,
+                ),
+            )
+        });
+    if let TranscodePlan::Encode { format, .. } = plan {
+        if !is_file(&located.path).await {
+            return Err(vanished(state, &located));
+        }
+        let ffmpeg = state
+            .media
+            .ffmpeg
+            .as_deref()
+            .unwrap_or_else(|| Path::new("ffmpeg"));
+        match transcode::spawn(ffmpeg, &located.path, plan, offset) {
+            Ok(stream) => {
+                let mut response = Response::new(Body::from_stream(stream));
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static(format.content_type()),
+                );
+                return Ok(Outcome::Raw(response));
+            }
+            Err(err) => {
+                if !WARNED_NO_FFMPEG.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        error = %err,
+                        "cannot run ffmpeg, tracks are streamed as they are"
+                    );
+                }
+            }
+        }
+    }
     serve(state, &located, headers, false)
         .await
         .map(Outcome::Raw)
+}
+
+/// Set once the missing ffmpeg has been logged.
+static WARNED_NO_FFMPEG: AtomicBool = AtomicBool::new(false);
+
+/// The number in parameter `name`, error 0 when there is a value that is not one.
+fn number(params: &Params, name: &str) -> Result<Option<u32>, ApiError> {
+    match params.get(name) {
+        None => Ok(None),
+        Some(raw) => raw
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| ApiError::generic(format!("invalid {name}"))),
+    }
+}
+
+async fn is_file(path: &Path) -> bool {
+    tokio::fs::metadata(path).await.is_ok_and(|m| m.is_file())
+}
+
+/// The track is gone from the disk: the library is scanned again so it leaves the
+/// catalog, and the caller gets 70.
+fn vanished(state: &AppState, located: &Located) -> ApiError {
+    state.scans.request(located.track.library);
+    ApiError::not_found()
 }
 
 pub(crate) async fn download(
@@ -95,15 +167,8 @@ async fn serve(
     headers: &HeaderMap,
     attachment: bool,
 ) -> Result<Response, ApiError> {
-    let vanished = || {
-        state.scans.request(located.track.library);
-        ApiError::not_found()
-    };
-    if !tokio::fs::metadata(&located.path)
-        .await
-        .is_ok_and(|m| m.is_file())
-    {
-        return Err(vanished());
+    if !is_file(&located.path).await {
+        return Err(vanished(state, located));
     }
     let mut request = Request::builder().method("GET").uri("/");
     for (name, value) in headers {
@@ -117,7 +182,7 @@ async fn serve(
         Err(never) => match never {},
     };
     if response.status() == StatusCode::NOT_FOUND {
-        return Err(vanished());
+        return Err(vanished(state, located));
     }
     let mut response = response.map(Body::new);
     if response.status().is_success()

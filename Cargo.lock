@@ -132,11 +132,16 @@ dependencies = [
  "armonika-core",
  "armonika-testdata",
  "blake3",
+ "bytes",
+ "futures-core",
+ "futures-util",
  "image",
  "lofty",
  "symphonia",
  "tempfile",
  "thiserror",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

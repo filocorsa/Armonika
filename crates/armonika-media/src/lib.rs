@@ -5,3 +5,4 @@
 pub mod content_hash;
 pub mod cover;
 pub mod probe;
+pub mod transcode;
