@@ -1,7 +1,8 @@
 //! The `serve` command: an HTTP server on `server.bind`.
 //!
 //! At startup it opens the database, creates the first admin if needed and creates the
-//! libraries of the configuration file that do not exist yet.
+//! libraries of the configuration file that do not exist yet. It then starts the scan
+//! controller: a scan of every library, folder watching and periodic rescans.
 
 use anyhow::Context;
 use axum::Router;
@@ -12,6 +13,8 @@ use armonika_core::db::Db;
 use armonika_core::libraries;
 use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, BootstrapOutcome};
+use armonika_scanner::controller::ScanController;
+use armonika_scanner::{ScanOptions, watch};
 
 use crate::config::Config;
 
@@ -30,6 +33,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (db, secrets) = crate::cli::open_store(&config)?;
     bootstrap_admin(&db, &secrets).await?;
     sync_libraries(&db, &config).await?;
+    let (controller, watcher) = start_scanning(&db, &config).await?;
     let listener = tokio::net::TcpListener::bind(config.server.bind)
         .await
         .with_context(|| format!("cannot bind {}", config.server.bind))?;
@@ -38,8 +42,39 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")?;
+    drop(watcher);
+    controller.shutdown();
     tracing::info!("shutdown complete");
     Ok(())
+}
+
+/// Starts the scan controller, asks for a scan of every library and starts the folder
+/// watchers and the periodic rescan. The changes the scans report are dropped for now.
+async fn start_scanning(
+    db: &Db,
+    config: &Config,
+) -> anyhow::Result<(ScanController, watch::WatchHandle)> {
+    let (changes, mut unused) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move { while unused.recv().await.is_some() {} });
+    let defaults = ScanOptions::default();
+    let opts = ScanOptions {
+        threads: config.scan.threads.max(1),
+        ..defaults
+    };
+    let controller = ScanController::new(db.clone(), opts, changes);
+    let libraries = db
+        .read(libraries::list)
+        .await
+        .context("cannot list the libraries")?;
+    let watched = if config.scan.watch {
+        libraries.into_iter().map(|l| (l.id, l.root)).collect()
+    } else {
+        Vec::new()
+    };
+    let watcher = watch::spawn(controller.clone(), watched, config.scan.interval);
+    let first = controller.clone();
+    tokio::task::spawn_blocking(move || first.request_all());
+    Ok((controller, watcher))
 }
 
 /// Creates the first admin from `ARMONIKA_ADMIN_USER` and `ARMONIKA_ADMIN_PASSWORD`

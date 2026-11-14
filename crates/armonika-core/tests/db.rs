@@ -52,8 +52,94 @@ fn open_applies_migrations_once() {
             Ok((version, tables))
         })
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 4);
     assert_eq!(tables, 1);
+}
+
+/// Two processes opening a new database at the same time must not both apply the
+/// migrations.
+#[test]
+fn concurrent_open_applies_migrations_once() {
+    for _ in 0..10 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("armonika.db");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Db::open(&path).map(drop)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+    }
+}
+
+#[test]
+fn migration_2_adds_artist_links() {
+    let (_dir, db) = open_temp();
+    db.read_blocking(|c| {
+        for table in ["track_artists", "album_artists"] {
+            let n: i64 = c.query_row(
+                "SELECT count(*) FROM pragma_table_info(?1) WHERE name = 'matched_by_name'",
+                [table],
+                |r| r.get(0),
+            )?;
+            assert_eq!(n, 1, "{table}");
+        }
+        let n: i64 = c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'artists_norm_mbid'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(n, 1);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn migration_3_adds_album_dates_and_tag_lists() {
+    let (_dir, db) = open_temp();
+    db.read_blocking(|c| {
+        let columns = |table: &str| -> rusqlite::Result<Vec<String>> {
+            let mut stmt = c.prepare("SELECT name FROM pragma_table_info(?1)")?;
+            stmt.query_map([table], |r| r.get(0))?.collect()
+        };
+        let albums = columns("library_albums")?;
+        for col in [
+            "date_y",
+            "date_m",
+            "date_d",
+            "orig_date_y",
+            "orig_date_m",
+            "orig_date_d",
+        ] {
+            assert!(albums.iter().any(|c| c == col), "library_albums.{col}");
+        }
+        let tracks = columns("tracks")?;
+        for col in [
+            "artists_tag",
+            "album_artists_tag",
+            "mb_artist_ids",
+            "mb_album_artist_ids",
+            "album_title_norm",
+        ] {
+            assert!(tracks.iter().any(|c| c == col), "tracks.{col}");
+        }
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -392,4 +478,31 @@ fn negative_user_version_is_an_error() {
         matches!(err, armonika_core::Error::InvalidSchemaVersion(-1)),
         "{err:?}"
     );
+}
+
+#[test]
+fn panic_inside_a_write_rolls_back_an_open_transaction() {
+    let (_dir, db) = open_temp();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.write_blocking(|c| -> armonika_core::Result<()> {
+            // A transaction begun with SQL is not rolled back by any drop guard.
+            c.execute_batch(
+                "BEGIN; INSERT INTO settings (key, value) VALUES ('half', 'written');",
+            )?;
+            panic!("closure fails in the middle of a batch");
+        })
+    }));
+    assert!(panicked.is_err());
+
+    let (autocommit, rows) = db
+        .write_blocking(|c| {
+            let rows: i64 = c.query_row("SELECT count(*) FROM settings", [], |r| r.get(0))?;
+            Ok((c.is_autocommit(), rows))
+        })
+        .unwrap();
+    assert!(
+        autocommit,
+        "the next writer must not inherit the transaction"
+    );
+    assert_eq!(rows, 0, "the half-written batch is rolled back");
 }

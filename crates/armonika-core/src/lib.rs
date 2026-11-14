@@ -1,13 +1,17 @@
 //! Core library of the Armonika music server.
 
 pub mod access;
+pub mod albums;
+pub mod artists;
 pub mod db;
 mod error;
 pub mod ids;
 pub mod libraries;
+pub mod model;
 pub mod paths;
 pub mod secret;
 pub mod text;
+pub mod track_files;
 pub mod users;
 
 pub use error::{Error, Result};

@@ -5,15 +5,21 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use r2d2_sqlite::SqliteConnectionManager;
-pub use rusqlite::Connection;
+pub use rusqlite::{Connection, Transaction};
+use rusqlite::{ErrorCode, TransactionBehavior};
 
 use crate::{Error, Result};
 
 /// Migrations in order; migration `i` (0-based) brings the schema to version `i + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_initial.sql"),
+    include_str!("../migrations/0002_artist_links.sql"),
+    include_str!("../migrations/0003_library_albums.sql"),
+    include_str!("../migrations/0004_hashed_once.sql"),
+];
 
 /// Number of reader connections in the pool.
 const READERS: u32 = 4;
@@ -45,8 +51,7 @@ impl Db {
         let mut writer = Connection::open(path)?;
         // busy_timeout first: switching to WAL needs a lock another process may hold.
         configure(&writer)?;
-        let mode: String =
-            writer.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
+        let mode = enable_wal(&writer)?;
         if !mode.eq_ignore_ascii_case("wal") {
             return Err(Error::WalUnavailable(mode));
         }
@@ -92,13 +97,20 @@ impl Db {
 
     /// Runs `f` on the writer connection on the current thread. For the scanner and the CLI.
     pub fn write_blocking<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
-        // A panic inside an earlier closure poisons the mutex; any open transaction
-        // was rolled back when it was dropped, so the connection is still usable.
-        let mut conn = self
-            .inner
-            .writer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        // A panic inside an earlier closure poisons the mutex. A `Transaction` it held
+        // was rolled back when dropped, but one begun with SQL (or by a long batch that
+        // never reached its commit) is still open: roll it back, so the next writer
+        // does not commit half of someone else's work.
+        let mut conn = self.inner.writer.lock().unwrap_or_else(|poisoned| {
+            let conn = PoisonError::into_inner(poisoned);
+            if !conn.is_autocommit() {
+                // If even the rollback fails the connection is unusable anyway; the next
+                // statement reports the error.
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            self.inner.writer.clear_poison();
+            conn
+        });
         f(&mut conn)
     }
 }
@@ -118,23 +130,46 @@ fn configure(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Applies the migrations newer than `PRAGMA user_version`, each in its own transaction.
+/// Switches the database to WAL and returns the journal mode SQLite reports. Two
+/// connections switching a new database at the same time can get SQLITE_BUSY at once,
+/// without the busy handler (each holds a shared lock the other needs), so the switch
+/// is retried until the busy timeout.
+fn enable_wal(conn: &Connection) -> Result<String> {
+    let deadline = Instant::now() + Duration::from_millis(BUSY_TIMEOUT_MS.into());
+    loop {
+        match conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0)) {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == ErrorCode::DatabaseBusy && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return Ok(result?),
+        }
+    }
+}
+
+/// Applies the migrations newer than `PRAGMA user_version`, each in its own IMMEDIATE
+/// transaction that re-reads the version after taking the write lock: when two processes
+/// open a new database at the same time, the second waits and then finds the migration
+/// already applied instead of applying it again.
 fn migrate(conn: &mut Connection) -> Result<()> {
     let latest = MIGRATIONS.len() as i64;
-    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if current > latest {
-        return Err(Error::SchemaTooNew {
-            found: current,
-            latest,
-        });
-    }
-    // A negative version would wrap to a huge count and silently skip every migration.
-    let applied = usize::try_from(current).map_err(|_| Error::InvalidSchemaVersion(current))?;
-    for (version, sql) in (1..).zip(MIGRATIONS).skip(applied) {
-        let tx = conn.transaction()?;
+    loop {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if current > latest {
+            return Err(Error::SchemaTooNew {
+                found: current,
+                latest,
+            });
+        }
+        // A negative version would wrap to a huge count and silently skip every migration.
+        let applied = usize::try_from(current).map_err(|_| Error::InvalidSchemaVersion(current))?;
+        let Some(sql) = MIGRATIONS.get(applied) else {
+            return Ok(());
+        };
         tx.execute_batch(sql)?;
-        tx.pragma_update(None, "user_version", version)?;
+        tx.pragma_update(None, "user_version", current + 1)?;
         tx.commit()?;
     }
-    Ok(())
 }

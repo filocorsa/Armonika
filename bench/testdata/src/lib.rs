@@ -1,6 +1,7 @@
 //! Deterministic fake music libraries for benchmarks and tests.
 
 mod big;
+pub mod fixture;
 pub mod messy;
 pub mod names;
 

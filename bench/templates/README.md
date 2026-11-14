@@ -20,3 +20,9 @@ ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 0.2 -map_metadata -1 -fflags
 ```
 
 The M4A file is AAC-LC; the OGG file is Vorbis.
+
+`cover.jpg` is an 8x8 black JPEG that the test fixtures embed as a cover:
+
+```sh
+ffmpeg -y -f lavfi -i color=c=black:s=8x8 -frames:v 1 -map_metadata -1 -fflags +bitexact -flags +bitexact cover.jpg
+```
