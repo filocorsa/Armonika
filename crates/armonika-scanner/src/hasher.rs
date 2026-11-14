@@ -66,9 +66,22 @@ pub struct HashReport {
 
 /// The background hasher. Create it once, give [`Hasher::handle`] to whoever scans, and
 /// run [`Hasher::run`] on a thread of its own.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Hasher {
     paused: Arc<Mutex<HashSet<LibraryId>>>,
+    /// Reads the tags of a file when a relink needs them (replaced in tests).
+    reader: Reader,
+}
+
+type Reader = fn(&Path) -> Result<FileFacts, String>;
+
+impl Default for Hasher {
+    fn default() -> Hasher {
+        Hasher {
+            paused: Arc::default(),
+            reader: read_isolated,
+        }
+    }
 }
 
 /// Pauses and resumes the hashing of a library, from another thread.
@@ -209,7 +222,7 @@ impl Hasher {
                     report.skipped += 1;
                     continue;
                 };
-                match process(db, root, job, changes) {
+                match process(db, root, job, self.reader, changes) {
                     Ok(Step::Hashed(plan)) => {
                         report.hashed += 1;
                         match plan {
@@ -278,6 +291,7 @@ fn process(
     db: &Db,
     root: &Path,
     job: &Pending,
+    reader: Reader,
     changes: &dyn Fn(LibraryChange),
 ) -> armonika_core::Result<Step> {
     let abs = root.join(rel_path_from_db(&job.rel));
@@ -298,12 +312,17 @@ fn process(
 
     let planned = db.read_blocking(|c| plan(c, job, &hash))?;
     let facts = match planned {
-        Plan::Revert | Plan::Merge { .. } => match read_isolated(&abs) {
+        Plan::Revert | Plan::Merge { .. } => match reader(&abs) {
             Ok(facts) if facts.size == job.size && facts.mtime_ms == job.mtime_ms => Some(facts),
             Ok(_) => return Ok(Step::Skipped),
             Err(message) => {
                 tracing::warn!(path = %abs.display(), error = %message, "cannot read file");
-                return mark_failed(db, job);
+                if matches!(planned, Plan::Merge { .. }) {
+                    return mark_failed(db, job);
+                }
+                // A revert does not need the tags: the proven-wrong link is undone
+                // anyway, and the next scan reads the file as a new one.
+                None
             }
         },
         Plan::Keep | Plan::Confirm => None,
@@ -362,7 +381,8 @@ fn hash_isolated_with<E: std::fmt::Display>(
 }
 
 /// Marks the track `failed`, if it is still the file that failed: no link is made or
-/// undone, and the scan makes the track pending again when the file changes.
+/// undone (a pre-filter link stays as it is and its `prev_*` columns are cleared: with
+/// no hash there is nothing to compare), and the scan makes the track pending again when the file changes.
 fn mark_failed(db: &Db, job: &Pending) -> armonika_core::Result<Step> {
     let rows = db.write_blocking(|conn| {
         let tx = conn.transaction()?;
@@ -473,22 +493,34 @@ fn apply(
     let library = job.library;
     match (planned, facts) {
         (Plan::Keep | Plan::Confirm, _) => store_hash(tx, job.key, hash)?,
-        (Plan::Revert, Some(facts)) => {
+        (Plan::Revert, facts) => {
             change.artists.extend(track_artist_ids(tx, &job.id)?);
             change.albums.extend(track_album(tx, &job.id)?);
-            // The track goes back to the file it had, which is not there now.
+            // The track goes back to the file it had, which is not there now. Its tag
+            // columns are those of the other file: tag_schema 0 makes the next scan read
+            // the original again when it comes back.
             tx.prepare_cached(
                 "UPDATE tracks SET state = 'missing', missing_since = ?2, updated_at = ?2,
                                    rel_path = COALESCE(prev_rel_path, rel_path),
+                                   tag_schema = 0,
                                    content_hash = prev_content_hash, hash_state = 'done',
                                    prev_content_hash = NULL, prev_rel_path = NULL
                  WHERE id = ?1",
             )?
             .execute(params![job.key, now_ms()])?;
-            let fresh = insert_track(tx, library, &job.rel, facts, TAG_SCHEMA_VERSION)?;
-            let key = armonika_core::ids::resolve_track(tx, &fresh)?.unwrap_or_default();
-            store_hash(tx, key, hash)?;
-            link_new(tx, library, &fresh, &facts.tags, change)?;
+            if facts.is_none() {
+                // No track takes the file now. The old track must not match it again
+                // in the pre-filter, which would repeat the wrong link: its size and
+                // date are those of the other file, so they are cleared.
+                tx.prepare_cached("UPDATE tracks SET size = 0, mtime_ms = 0 WHERE id = ?1")?
+                    .execute([job.key])?;
+            }
+            if let Some(facts) = facts {
+                let fresh = insert_track(tx, library, &job.rel, facts, TAG_SCHEMA_VERSION)?;
+                let key = armonika_core::ids::resolve_track(tx, &fresh)?.unwrap_or_default();
+                store_hash(tx, key, hash)?;
+                link_new(tx, library, &fresh, &facts.tags, change)?;
+            }
             change.hidden.insert(job.id.clone());
             reconcile(tx, library, change)?;
         }
@@ -515,7 +547,7 @@ fn apply(
             store_hash(tx, target, hash)?;
             reconcile(tx, library, change)?;
         }
-        (Plan::Revert | Plan::Merge { .. }, None) => return Ok(Outcome::Skipped),
+        (Plan::Merge { .. }, None) => return Ok(Outcome::Skipped),
     }
     Ok(Outcome::Done(planned))
 }
@@ -629,6 +661,79 @@ mod tests {
             "{err}"
         );
         assert!(hash_isolated(Path::new("does/not/exist.mp3")).is_err());
+    }
+
+    #[test]
+    fn revert_without_readable_tags_still_undoes_the_link() {
+        use armonika_core::libraries;
+        use armonika_testdata::AudioFormat;
+        use armonika_testdata::fixture::{FixtureTags, tagged_file};
+
+        let data = tempfile::tempdir().unwrap();
+        let music = tempfile::tempdir().unwrap();
+        let db = Db::open(&data.path().join("armonika.db")).unwrap();
+        let lib = db
+            .write_blocking(|c| libraries::create(c, "Music", music.path(), data.path()))
+            .unwrap();
+        let scan = || {
+            crate::scan_library(&db, lib, crate::ScanOptions::default(), &|_| {}, &|_| {}).unwrap()
+        };
+        let tags = FixtureTags {
+            title: Some("Song".to_owned()),
+            ..FixtureTags::default()
+        };
+        let a = tagged_file(music.path(), "a.mp3", AudioFormat::Mp3, &tags);
+        let mtime = fs::metadata(&a).unwrap().modified().unwrap();
+        scan();
+        let hasher = Hasher::new();
+        let stop = CancellationToken::new();
+        hasher.hash_pending(&db, &stop, &|_| {});
+        let old_hash: Vec<u8> = db
+            .read_blocking(
+                |c| Ok(c.query_row("SELECT content_hash FROM tracks", [], |r| r.get(0))?),
+            )
+            .unwrap();
+
+        // Different audio, same size and date, at another path: the pre-filter relinks.
+        let mut bytes = fs::read(&a).unwrap();
+        let at = bytes.len() - 200;
+        bytes[at] ^= 0xFF;
+        fs::remove_file(&a).unwrap();
+        let b = music.path().join("b.mp3");
+        fs::write(&b, bytes).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(scan().relinked_prefilter, 1);
+
+        let failing = Hasher {
+            reader: |_| Err("cannot read tags".to_owned()),
+            ..hasher
+        };
+        let report = failing.hash_pending(&db, &stop, &|_| {});
+        assert_eq!(report.reverted, 1, "{report:?}");
+        assert_eq!(report.failed, 0);
+        let row: (String, String, Option<Vec<u8>>, Option<String>, String) = db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT state, rel_path, content_hash, prev_rel_path, hash_state
+                     FROM tracks",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(row.0, "missing");
+        assert_eq!(row.1, "a.mp3");
+        assert_eq!(row.2, Some(old_hash));
+        assert_eq!(row.3, None);
+        assert_eq!(row.4, "done");
+
+        // The next scan reads the file as a new one.
+        assert_eq!(scan().new, 1);
     }
 
     #[test]

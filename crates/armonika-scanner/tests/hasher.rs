@@ -209,9 +209,13 @@ fn prefilter_link_reverted_on_mismatch() {
 
     // A different file with the same size and modification time at another path: the
     // pre-filter takes it for the moved file.
-    let mut bytes = fs::read(&old).unwrap();
+    let original = fs::read(&old).unwrap();
+    let mut bytes = original.clone();
     let at = bytes.len() - 200;
     bytes[at] ^= 0xFF;
+    // Same length, different title: the two files tell different songs.
+    let title = bytes.windows(4).position(|w| w == b"Song").unwrap();
+    bytes[title..title + 4].copy_from_slice(b"Tong");
     let mtime = mtime_secs(&old);
     fs::remove_file(&old).unwrap();
     let new = lib.root().join("b.mp3");
@@ -236,7 +240,7 @@ fn prefilter_link_reverted_on_mismatch() {
     let fresh_row = lib.row(&fresh);
     assert_eq!(fresh_row.hash_state, "done");
     assert_ne!(fresh_row.content_hash, Some(old_hash));
-    assert_eq!(fresh_row.title.as_deref(), Some("Song"));
+    assert_eq!(fresh_row.title.as_deref(), Some("Tong"));
     assert_eq!(lib.count("SELECT count(*) FROM tracks"), 2);
     assert_eq!(
         lib.count("SELECT count(*) FROM tracks WHERE library_album_id IS NOT NULL"),
@@ -247,6 +251,16 @@ fn prefilter_link_reverted_on_mismatch() {
     assert!(events[0].tracks_upserted.contains(&fresh));
     assert!(events[0].tracks_hidden.contains(&id));
     assert!(!events[0].albums_touched.is_empty());
+
+    // The original file comes back: the old track must show its own tags again, not
+    // those of the file it was wrongly linked to.
+    fs::remove_file(&new).unwrap();
+    fs::write(&old, original).unwrap();
+    set_mtime(&old, mtime);
+    lib.scan();
+    assert_eq!(lib.present_at("a.mp3"), Some(id.clone()));
+    lib.scan();
+    assert_eq!(lib.row(&id).title.as_deref(), Some("Song"));
 }
 
 /// Personal data on both tracks of a relink: the kept track and the absorbed one.
