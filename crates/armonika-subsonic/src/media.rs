@@ -94,14 +94,22 @@ pub(crate) async fn stream(
             .as_deref()
             .unwrap_or_else(|| Path::new("ffmpeg"));
         match transcode::spawn(ffmpeg, &located.path, plan, offset) {
-            Ok(stream) => {
-                let mut response = Response::new(Body::from_stream(stream));
-                response.headers_mut().insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static(format.content_type()),
-                );
-                return Ok(Outcome::Raw(response));
-            }
+            Ok(mut stream) => match stream.prime().await {
+                Ok(()) => {
+                    let mut response = Response::new(Body::from_stream(stream));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static(format.content_type()),
+                    );
+                    return Ok(Outcome::Raw(response));
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "ffmpeg gave no audio, the track is streamed as it is"
+                    );
+                }
+            },
             Err(err) => {
                 if !WARNED_NO_FFMPEG.swap(true, Ordering::Relaxed) {
                     tracing::warn!(

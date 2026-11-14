@@ -79,6 +79,43 @@ fn plan_encode_with_max_below_source() {
 }
 
 #[test]
+fn plan_raw_when_requested_format_is_the_source() {
+    let plan = transcode::plan(
+        AudioFormat::Flac,
+        Some(900),
+        Some("flac"),
+        Some(9999),
+        DEFAULTS,
+    );
+    assert_eq!(plan, TranscodePlan::Raw);
+    let plan = transcode::plan(
+        AudioFormat::M4a,
+        Some(256),
+        Some("aac"),
+        Some(9999),
+        DEFAULTS,
+    );
+    assert_eq!(plan, TranscodePlan::Raw);
+    let plan = transcode::plan(AudioFormat::M4a, Some(256), Some("M4A"), None, DEFAULTS);
+    assert_eq!(plan, TranscodePlan::Raw);
+    // Below the source rate it is still encoded, to the default format.
+    let plan = transcode::plan(
+        AudioFormat::Flac,
+        Some(900),
+        Some("flac"),
+        Some(128),
+        DEFAULTS,
+    );
+    assert_eq!(
+        plan,
+        TranscodePlan::Encode {
+            format: TargetFormat::Mp3,
+            kbps: 128
+        }
+    );
+}
+
+#[test]
 fn plan_unknown_format_uses_default() {
     let plan = transcode::plan(
         AudioFormat::Flac,
@@ -169,24 +206,49 @@ fn alive(pid: u32) -> bool {
     }
 }
 
+/// A stand-in for ffmpeg: a script that runs `unix` (sh) or `windows` (cmd) and ignores
+/// its arguments.
+fn fake_ffmpeg(dir: &Path, unix: &str, windows: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        let path = dir.join("fake-ffmpeg.cmd");
+        fs::write(&path, format!("@echo off\r\n{windows}\r\n")).unwrap();
+        path
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("fake-ffmpeg.sh");
+            fs::write(&path, format!("#!/bin/sh\n{unix}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            return path;
+        }
+        #[allow(unreachable_code)]
+        {
+            let _ = unix;
+            unreachable!()
+        }
+    }
+}
+
+const ENCODE: TranscodePlan = TranscodePlan::Encode {
+    format: TargetFormat::Mp3,
+    kbps: 128,
+};
+
 #[tokio::test]
 async fn client_disconnect_kills_ffmpeg() {
-    if !ffmpeg_available() {
-        eprintln!("skipped: ffmpeg is not on the PATH");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
-    let input = dir.path().join("in.wav");
-    // Long enough for the output to fill the pipe, so ffmpeg waits for a reader.
-    write_wav(&input, 120);
-    let plan = TranscodePlan::Encode {
-        format: TargetFormat::Mp3,
-        kbps: 320,
-    };
-    let mut stream = transcode::spawn(Path::new("ffmpeg"), &input, plan, None).unwrap();
+    // Runs for a minute and writes nothing, ignoring a closed output: only the kill on
+    // drop can end it.
+    let fake = fake_ffmpeg(
+        dir.path(),
+        "trap '' PIPE\nsleep 60",
+        "ping -n 60 127.0.0.1 >nul",
+    );
+    let stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
     let pid = stream.id().expect("a running process has a pid");
-    assert!(stream.next().await.unwrap().is_ok());
-    assert!(alive(pid));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(alive(pid), "the fake ffmpeg should be running");
     drop(stream);
     for _ in 0..50 {
         if !alive(pid) {
@@ -194,5 +256,41 @@ async fn client_disconnect_kills_ffmpeg() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("ffmpeg is still running after the stream was dropped");
+    panic!("the process is still running after the stream was dropped");
+}
+
+#[tokio::test]
+async fn failing_ffmpeg_ends_with_an_error_before_any_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_ffmpeg(
+        dir.path(),
+        "echo boom >&2\nexit 3",
+        "echo boom 1>&2\r\nexit /b 3",
+    );
+    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let err = stream.prime().await.unwrap_err();
+    assert!(err.to_string().contains("ffmpeg failed"), "{err}");
+    // A failure is an error, then the end.
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn ffmpeg_that_exits_cleanly_without_output_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_ffmpeg(dir.path(), "exit 0", "exit /b 0");
+    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    assert!(stream.prime().await.is_err());
+}
+
+#[tokio::test]
+async fn failure_after_some_audio_is_an_error_not_a_clean_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = fake_ffmpeg(dir.path(), "echo audio\nexit 1", "echo audio\r\nexit /b 1");
+    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    stream.prime().await.unwrap();
+    let mut saw_error = false;
+    while let Some(item) = stream.next().await {
+        saw_error |= item.is_err();
+    }
+    assert!(saw_error);
 }

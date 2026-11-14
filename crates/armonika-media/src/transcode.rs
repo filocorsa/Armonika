@@ -5,6 +5,7 @@
 //! argument vector (never a shell), and the only values that reach it besides the path
 //! are numbers and a codec picked from a fixed set.
 
+use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
@@ -14,7 +15,8 @@ use std::task::{Context, Poll};
 use armonika_core::model::AudioFormat;
 use bytes::Bytes;
 use futures_core::Stream;
-use tokio::process::{Child, ChildStdout, Command};
+use tokio::io::AsyncReadExt;
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio_util::io::ReaderStream;
 
 /// Lowest bit rate passed to ffmpeg, in kbit/s.
@@ -66,13 +68,18 @@ impl TargetFormat {
             TargetFormat::Aac => "adts",
         }
     }
+}
 
-    /// Whether files of `source` already are in this format.
-    fn is_source(self, source: AudioFormat) -> bool {
-        matches!(
-            (self, source),
-            (TargetFormat::Mp3, AudioFormat::Mp3) | (TargetFormat::Opus, AudioFormat::Opus)
-        )
+/// The names a client may use for `format` when it means the format of the file itself.
+fn names_of(source: AudioFormat) -> &'static [&'static str] {
+    match source {
+        AudioFormat::Mp3 => &["mp3"],
+        AudioFormat::Flac => &["flac"],
+        AudioFormat::Ogg => &["ogg", "oga"],
+        AudioFormat::Opus => &["opus"],
+        AudioFormat::M4a => &["m4a", "aac", "mp4"],
+        AudioFormat::Wav => &["wav"],
+        AudioFormat::Aiff => &["aif", "aiff"],
     }
 }
 
@@ -103,11 +110,11 @@ pub fn plan(
     let max_kbps = max_kbps.filter(|k| *k > 0);
     let target = requested.and_then(TargetFormat::parse);
     // A format that is the one of the file is not a request to change it.
-    let same_format = match (requested, target) {
-        (None, _) => true,
-        (Some(_), Some(target)) => target.is_source(source_format),
-        (Some(_), None) => false,
-    };
+    let same_format = requested.is_none_or(|f| {
+        names_of(source_format)
+            .iter()
+            .any(|name| f.eq_ignore_ascii_case(name))
+    });
     if same_format {
         let fits = match (max_kbps, source_kbps) {
             (None, _) => true,
@@ -133,25 +140,100 @@ pub fn plan(
     }
 }
 
-/// The output of an ffmpeg process. Dropping it kills the process.
+/// How many bytes of the error output of ffmpeg are kept for the log.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+type Finish = Pin<Box<dyn Future<Output = io::Result<()>> + Send>>;
+
+enum State {
+    Reading,
+    /// The output ended: waiting for the exit status of the process.
+    Finishing(Finish),
+    Done,
+}
+
+/// The output of an ffmpeg process. Dropping it kills the process. If ffmpeg exits with
+/// an error the stream ends with an error (never as a clean end) and the tail of its
+/// error output is logged.
 pub struct TranscodeStream {
     // Held so that dropping the stream kills the process (`kill_on_drop`).
-    child: Child,
+    child: Option<Child>,
+    stderr: Option<ChildStderr>,
     output: ReaderStream<ChildStdout>,
+    prefetched: Option<Bytes>,
+    state: State,
 }
 
 impl TranscodeStream {
     /// The process id, while the process is running.
     pub fn id(&self) -> Option<u32> {
-        self.child.id()
+        self.child.as_ref().and_then(Child::id)
     }
+
+    /// Waits for the first bytes of audio. An error means ffmpeg failed or ended without
+    /// producing any, so nothing was sent yet and the caller can serve the file as it
+    /// is. The bytes are kept and come out first.
+    pub async fn prime(&mut self) -> io::Result<()> {
+        match std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await {
+            Some(Ok(first)) => {
+                self.prefetched = Some(first);
+                Ok(())
+            }
+            Some(Err(err)) => Err(err),
+            None => Err(io::Error::other("ffmpeg produced no audio")),
+        }
+    }
+}
+
+async fn finish(mut child: Child, stderr: Option<ChildStderr>) -> io::Result<()> {
+    let mut tail = Vec::new();
+    if let Some(stderr) = stderr {
+        // Bounded: more than this is not read, and the writer gets a broken pipe.
+        let _ = stderr
+            .take(STDERR_TAIL_BYTES as u64)
+            .read_to_end(&mut tail)
+            .await;
+    }
+    let status = child.wait().await?;
+    if status.success() {
+        return Ok(());
+    }
+    tracing::warn!(
+        %status,
+        stderr = %String::from_utf8_lossy(&tail).trim(),
+        "ffmpeg failed"
+    );
+    Err(io::Error::other(format!("ffmpeg failed: {status}")))
 }
 
 impl Stream for TranscodeStream {
     type Item = io::Result<Bytes>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.output).poll_next(cx)
+        let this = &mut *self;
+        if let Some(bytes) = this.prefetched.take() {
+            return Poll::Ready(Some(Ok(bytes)));
+        }
+        loop {
+            match &mut this.state {
+                State::Reading => match Pin::new(&mut this.output).poll_next(cx) {
+                    Poll::Ready(None) => match this.child.take() {
+                        Some(child) => {
+                            let stderr = this.stderr.take();
+                            this.state = State::Finishing(Box::pin(finish(child, stderr)));
+                        }
+                        None => this.state = State::Done,
+                    },
+                    other => return other,
+                },
+                State::Finishing(done) => {
+                    let result = std::task::ready!(done.as_mut().poll(cx));
+                    this.state = State::Done;
+                    return Poll::Ready(result.err().map(Err));
+                }
+                State::Done => return Poll::Ready(None),
+            }
+        }
     }
 }
 
@@ -184,7 +266,7 @@ pub fn spawn(
         .args(["-f", format.container(), "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn()?;
     let stdout = child
@@ -192,7 +274,10 @@ pub fn spawn(
         .take()
         .ok_or_else(|| io::Error::other("ffmpeg has no output"))?;
     Ok(TranscodeStream {
-        child,
+        stderr: child.stderr.take(),
+        child: Some(child),
         output: ReaderStream::new(stdout),
+        prefetched: None,
+        state: State::Reading,
     })
 }

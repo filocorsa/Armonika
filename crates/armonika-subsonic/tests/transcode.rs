@@ -91,3 +91,37 @@ async fn missing_ffmpeg_falls_back_to_raw() {
     assert_eq!(reply.headers["content-type"], "audio/mpeg");
     assert_eq!(reply.bytes, fs::read(app.music_a.join("one.mp3")).unwrap());
 }
+
+#[tokio::test]
+async fn failing_ffmpeg_falls_back_to_raw() {
+    // A stand-in that starts and fails without producing audio.
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir
+        .path()
+        .join(if cfg!(windows) { "fake.cmd" } else { "fake.sh" });
+    if cfg!(windows) {
+        fs::write(&fake, "@echo off\r\necho boom 1>&2\r\nexit /b 3\r\n").unwrap();
+    } else {
+        fs::write(&fake, "#!/bin/sh\necho boom >&2\nexit 3\n").unwrap();
+        make_executable(&fake);
+    }
+    let app = app_with_media(media(Some(fake))).await;
+    let id = one_track(&app).await;
+    let reply = get(
+        &app,
+        &format!("/rest/stream?{}&id={id}&format=opus&maxBitRate=64", ann()),
+    )
+    .await;
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.headers["content-type"], "audio/mpeg");
+    assert_eq!(reply.bytes, fs::read(app.music_a.join("one.mp3")).unwrap());
+}
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn make_executable(_: &std::path::Path) {}
