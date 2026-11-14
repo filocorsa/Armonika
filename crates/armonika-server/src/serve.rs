@@ -32,11 +32,14 @@ fn router(config: &Config) -> Router {
     }
 }
 
+/// How long shutdown waits for the search index updater to apply its last changes.
+const SEARCH_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let (db, secrets) = crate::cli::open_store(&config)?;
     bootstrap_admin(&db, &secrets).await?;
     sync_libraries(&db, &config).await?;
-    let (controller, watcher) = start_scanning(&db, &config).await?;
+    let (controller, watcher, search_updater) = start_scanning(&db, &config).await?;
     let listener = tokio::net::TcpListener::bind(config.server.bind)
         .await
         .with_context(|| format!("cannot bind {}", config.server.bind))?;
@@ -47,6 +50,19 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .context("server error")?;
     drop(watcher);
     controller.shutdown();
+    // The scan controller holds the senders of the change channel: once it is gone the
+    // updater applies what is pending and ends. Changes it could not apply in time
+    // are lost for good (the scanner reports each only once), so mark the index
+    // as outdated and let the next start rebuild it.
+    drop(controller);
+    match tokio::time::timeout(SEARCH_FLUSH_TIMEOUT, search_updater).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::error!(error = %e, "the search index updater failed"),
+        Err(_) => {
+            tracing::warn!("the search index updater did not finish in time");
+            updater::invalidate(&db).await;
+        }
+    }
     tracing::info!("shutdown complete");
     Ok(())
 }
@@ -57,7 +73,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 async fn start_scanning(
     db: &Db,
     config: &Config,
-) -> anyhow::Result<(ScanController, watch::WatchHandle)> {
+) -> anyhow::Result<(
+    ScanController,
+    watch::WatchHandle,
+    tokio::task::JoinHandle<()>,
+)> {
     let (changes, rx) = tokio::sync::mpsc::unbounded_channel();
     let search_dir = config.data_dir.join("search");
     let index = tokio::task::spawn_blocking(move || TantivyIndex::open(&search_dir))
@@ -67,7 +87,7 @@ async fn start_scanning(
     let created = index.was_created();
     let index: Arc<dyn SearchIndex> = Arc::new(index);
     let search_db = db.clone();
-    tokio::spawn(async move {
+    let search_updater = tokio::spawn(async move {
         if let Err(e) = updater::rebuild_if_needed(search_db.clone(), index.clone(), created).await
         {
             tracing::error!(error = %e, "cannot rebuild the search index");
@@ -92,7 +112,7 @@ async fn start_scanning(
     let watcher = watch::spawn(controller.clone(), watched, config.scan.interval);
     let first = controller.clone();
     tokio::task::spawn_blocking(move || first.request_all());
-    Ok((controller, watcher))
+    Ok((controller, watcher, search_updater))
 }
 
 /// Creates the first admin from `ARMONIKA_ADMIN_USER` and `ARMONIKA_ADMIN_PASSWORD`

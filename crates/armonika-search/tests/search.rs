@@ -230,3 +230,19 @@ fn index_survives_reopening() {
     assert!(!index.was_created());
     assert_eq!(tracks(&index, &query("persistent")), [track_id(1)]);
 }
+
+#[test]
+fn damaged_index_is_recreated_and_reported_as_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("search");
+    {
+        let index = TantivyIndex::open(&path).unwrap();
+        index
+            .upsert(vec![track(1, LIB, "Persistent", "A", "")])
+            .unwrap();
+    }
+    std::fs::write(path.join("tracks").join("meta.json"), b"not json").unwrap();
+    let index = TantivyIndex::open(&path).unwrap();
+    assert!(index.was_created(), "the caller must rebuild it");
+    assert!(tracks(&index, &query("persistent")).is_empty());
+}

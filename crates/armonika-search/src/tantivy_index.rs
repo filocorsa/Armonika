@@ -111,7 +111,7 @@ struct Group {
 
 impl Group {
     fn open(dir: &Path) -> Result<(Group, bool)> {
-        let created = !dir.join("meta.json").exists();
+        let mut created = !dir.join("meta.json").exists();
         std::fs::create_dir_all(dir).map_err(search_err)?;
         let index = match Self::open_index(dir) {
             Ok(index) => index,
@@ -119,6 +119,7 @@ impl Group {
                 // A schema from another version, or damaged files: the index only
                 // holds a copy of the database, so start again (the caller rebuilds).
                 tracing::warn!(dir = %dir.display(), error = %e, "search index unusable, recreating it");
+                created = true;
                 std::fs::remove_dir_all(dir).map_err(search_err)?;
                 std::fs::create_dir_all(dir).map_err(search_err)?;
                 Self::open_index(dir)?

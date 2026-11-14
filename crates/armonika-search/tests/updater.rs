@@ -5,7 +5,7 @@ use armonika_core::ids::{ArtistId, LibraryId, TrackId};
 use armonika_core::model::LibraryChange;
 use armonika_core::search_source;
 use armonika_search::{
-    DocId, GroupLimits, INDEX_SCHEMA_VERSION, SearchIndex, SearchQuery, TantivyIndex, updater,
+    GroupLimits, INDEX_SCHEMA_VERSION, SearchIndex, SearchQuery, TantivyIndex, updater,
 };
 use rusqlite::params;
 use tokio::sync::mpsc;
@@ -227,5 +227,94 @@ async fn touched_artist_without_links_is_removed() {
     apply(&e, change).await;
     assert!(e.find("delta").artists.is_empty());
     assert!(e.find("delta").tracks.is_empty());
-    let _ = DocId::Track(tid("t-d1"));
+}
+
+/// An index whose writes can be made to fail.
+struct Flaky {
+    inner: Arc<TantivyIndex>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+impl Flaky {
+    fn new(e: &Env) -> Arc<Flaky> {
+        Arc::new(Flaky {
+            inner: e.index.clone(),
+            fail: std::sync::atomic::AtomicBool::new(true),
+        })
+    }
+}
+
+impl SearchIndex for Flaky {
+    fn search(&self, q: &SearchQuery) -> armonika_core::Result<armonika_search::SearchHits> {
+        self.inner.search(q)
+    }
+    fn upsert(&self, docs: Vec<armonika_search::SearchDoc>) -> armonika_core::Result<()> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(armonika_core::Error::Search("injected".into()));
+        }
+        self.inner.upsert(docs)
+    }
+    fn remove(&self, ids: Vec<armonika_search::DocId>) -> armonika_core::Result<()> {
+        self.inner.remove(ids)
+    }
+    fn clear(&self) -> armonika_core::Result<()> {
+        self.inner.clear()
+    }
+}
+
+fn stored_version(e: &Env) -> Option<String> {
+    e.db.read_blocking(|c| search_source::setting(c, "search_index_version"))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn interrupted_rebuild_leaves_no_version() {
+    let e = env();
+    e.track("t-e1", "Epsilon Song", "present", "Epsilon Band");
+    updater::rebuild(e.db.clone(), e.as_index()).await.unwrap();
+    assert!(stored_version(&e).is_some());
+
+    let flaky: Arc<dyn SearchIndex> = Flaky::new(&e);
+    assert!(updater::rebuild(e.db.clone(), flaky).await.is_err());
+    assert_eq!(
+        stored_version(&e),
+        None,
+        "a partial index must not look complete"
+    );
+    // So the next start rebuilds.
+    assert!(
+        updater::rebuild_if_needed(e.db.clone(), e.as_index(), false)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn failed_batch_marks_the_index_outdated() {
+    let e = env();
+    e.track("t-f1", "Zeta Song", "present", "Zeta Band");
+    updater::rebuild(e.db.clone(), e.as_index()).await.unwrap();
+    assert!(stored_version(&e).is_some());
+
+    let flaky: Arc<dyn SearchIndex> = Flaky::new(&e);
+    e.track("t-f2", "Zeta Tune", "present", "Zeta Band");
+    let mut change = LibraryChange::new(LIB);
+    change.tracks_upserted.push(tid("t-f2"));
+    let (tx, rx) = mpsc::unbounded_channel();
+    tx.send(change).unwrap();
+    drop(tx);
+    updater::run(e.db.clone(), flaky, rx).await;
+    assert_eq!(stored_version(&e), None);
+}
+
+#[tokio::test]
+async fn closing_the_channel_flushes_without_waiting_for_the_window() {
+    let e = env();
+    e.track("t-g1", "Eta Song", "present", "Eta Band");
+    let mut change = LibraryChange::new(LIB);
+    change.tracks_upserted.push(tid("t-g1"));
+    let started = std::time::Instant::now();
+    apply(&e, change).await;
+    assert!(started.elapsed() < updater::COMMIT_INTERVAL);
+    assert_eq!(e.find("eta").tracks, [tid("t-g1")]);
 }

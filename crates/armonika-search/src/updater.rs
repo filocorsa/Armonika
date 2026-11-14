@@ -51,8 +51,9 @@ impl Pending {
     }
 }
 
-/// Applies the changes it receives until the channel closes. Errors are logged: the
-/// next event, or the rebuild at the next start, repairs the index.
+/// Applies the changes it receives until the channel closes, applying what is pending
+/// at once when it does. A batch that cannot be applied is lost, so the recorded schema
+/// version is cleared ([`invalidate`]) and the next start rebuilds the index.
 pub async fn run(
     db: Db,
     index: Arc<dyn SearchIndex>,
@@ -76,11 +77,25 @@ pub async fn run(
             }
         }
         if let Err(e) = apply(&db, &index, pending).await {
-            tracing::warn!(error = %e, "cannot update the search index");
+            tracing::warn!(error = %e, "cannot update the search index, it will be rebuilt at the next start");
+            invalidate(&db).await;
         }
         if closed {
             break;
         }
+    }
+}
+
+/// Forgets the version the index was built with: the next start rebuilds it.
+pub async fn invalidate(db: &Db) {
+    let cleared = db
+        .write(|c| {
+            c.execute("DELETE FROM settings WHERE key = ?1", [VERSION_SETTING])?;
+            Ok(())
+        })
+        .await;
+    if let Err(e) = cleared {
+        tracing::error!(error = %e, "cannot mark the search index as outdated");
     }
 }
 
@@ -134,6 +149,9 @@ async fn write(index: &Arc<dyn SearchIndex>, gone: Vec<DocId>, docs: Vec<SearchD
 /// Empties the index and indexes everything visible in the database, then records
 /// [`INDEX_SCHEMA_VERSION`].
 pub async fn rebuild(db: Db, index: Arc<dyn SearchIndex>) -> Result<()> {
+    // Until the end the index is partial: a crash or an error midway must not leave a
+    // version that says it is complete.
+    invalidate(&db).await;
     let idx = Arc::clone(&index);
     tokio::task::spawn_blocking(move || idx.clear()).await??;
     let (tracks, albums, artists) = db

@@ -109,7 +109,8 @@ fn score(qtoks: &[Vec<char>], doc: &Doc) -> f32 {
 
 /// The indexes of `docs` best first. `boost(i)` is subtracted from the cost of
 /// `docs[i]`. A query without words (only CJK text, which the engine matched on its
-/// own) keeps the order of the engine, minus the boost.
+/// own) gets the same cost for every doc, so the order of the engine decides, after
+/// the boost.
 pub fn rerank_group(query: &str, docs: &[Doc], boost: &dyn Fn(usize) -> f32) -> Vec<usize> {
     let qtoks: Vec<Vec<char>> = tokens(query).iter().map(|t| t.chars().collect()).collect();
     let mut scored: Vec<(f32, usize)> = docs
