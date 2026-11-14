@@ -52,7 +52,7 @@ fn open_applies_migrations_once() {
             Ok((version, tables))
         })
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     assert_eq!(tables, 1);
 }
 
@@ -81,7 +81,7 @@ fn concurrent_open_applies_migrations_once() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 }
 

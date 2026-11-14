@@ -137,8 +137,8 @@ fn purge_missing(
         &format!("DELETE FROM tracks WHERE id IN ({SELECTED})"),
         params![library.0, cutoff],
     )?;
-    reconcile_albums(&tx, library)?;
     reconcile_artists(&tx, library)?;
+    reconcile_albums(&tx, library)?;
     tx.commit()?;
     Ok(done)
 }

@@ -172,6 +172,9 @@ struct Pending {
     /// Hash before the pre-filter relink, if the track had one.
     prev_hash: Option<Vec<u8>>,
     prev_rel: Option<String>,
+    /// The track had a content hash at some point: it is an established track, not a
+    /// file just found by the scan, and is never merged into another one.
+    hashed_once: bool,
 }
 
 /// What to do with a hashed track.
@@ -316,7 +319,7 @@ fn pending_batch(
     };
     let mut stmt = conn.prepare(&format!(
         "SELECT id, public_id, library_id, rel_path, size, mtime_ms,
-                prev_content_hash, prev_rel_path
+                prev_content_hash, prev_rel_path, hashed_once
          FROM tracks
          WHERE state = 'present' AND hash_state = 'pending' AND id > ?1 {filter}
          ORDER BY id LIMIT {BATCH}"
@@ -331,6 +334,7 @@ fn pending_batch(
             mtime_ms: r.get(5)?,
             prev_hash: r.get(6)?,
             prev_rel: r.get(7)?,
+            hashed_once: r.get(8)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -468,9 +472,10 @@ fn plan(conn: &Connection, job: &Pending, hash: &[u8; 32]) -> armonika_core::Res
             Plan::Revert
         });
     }
-    if job.prev_rel.is_some() {
-        // Relinked by the pre-filter with no hash to compare: the link stays, and the
-        // track must not be merged into another one, it is the older identity itself.
+    if job.prev_rel.is_some() || job.hashed_once {
+        // Relinked by the pre-filter with no hash to compare, or changed after it was
+        // hashed: the track stays, it must not be merged into another one (it is the
+        // older identity itself, and merging duplicates is a manual choice).
         return Ok(Plan::Keep);
     }
     let candidates: Vec<(i64, String)> = conn
@@ -558,13 +563,11 @@ fn apply(
                  WHERE id = ?1",
             )?
             .execute(params![job.key, now_ms()])?;
-            if facts.is_none() {
-                // No track takes the file now. The old track must not match it again
-                // in the pre-filter, which would repeat the wrong link: its size and
-                // date are those of the other file, so they are cleared.
-                tx.prepare_cached("UPDATE tracks SET size = 0, mtime_ms = 0 WHERE id = ?1")?
-                    .execute([job.key])?;
-            }
+            // The size and date are those of the other file: they are cleared, so the
+            // old track neither matches that file again in the pre-filter nor takes the
+            // original for an unchanged file when it comes back (the scan reads it).
+            tx.prepare_cached("UPDATE tracks SET size = 0, mtime_ms = 0 WHERE id = ?1")?
+                .execute([job.key])?;
             if let Some(facts) = facts {
                 let fresh = insert_track(tx, library, &job.rel, facts, TAG_SCHEMA_VERSION)?;
                 let key = armonika_core::ids::resolve_track(tx, &fresh)?.unwrap_or_default();
@@ -605,7 +608,7 @@ fn apply(
 /// The hash of the track with internal key `key` is `hash`; no link to confirm any more.
 fn store_hash(tx: &Transaction<'_>, key: i64, hash: &[u8; 32]) -> armonika_core::Result<()> {
     tx.prepare_cached(
-        "UPDATE tracks SET content_hash = ?2, hash_state = 'done',
+        "UPDATE tracks SET content_hash = ?2, hash_state = 'done', hashed_once = 1,
                            prev_content_hash = NULL, prev_rel_path = NULL
          WHERE id = ?1",
     )?

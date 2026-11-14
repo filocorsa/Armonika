@@ -18,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_artist_links.sql"),
     include_str!("../migrations/0003_library_albums.sql"),
+    include_str!("../migrations/0004_hashed_once.sql"),
 ];
 
 /// Number of reader connections in the pool.

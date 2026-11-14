@@ -129,6 +129,12 @@ impl Lib {
             .unwrap()
     }
 
+    fn text(&self, sql: &str) -> String {
+        self.db
+            .read_blocking(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
+    }
+
     fn count(&self, sql: &str) -> i64 {
         self.db
             .read_blocking(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
@@ -216,6 +222,14 @@ fn prefilter_link_reverted_on_mismatch() {
     // Same length, different title: the two files tell different songs.
     let title = bytes.windows(4).position(|w| w == b"Song").unwrap();
     bytes[title..title + 4].copy_from_slice(b"Tong");
+    // The other file tells another album and artist too (same lengths).
+    for (from, to) in [
+        (&b"Hot Space"[..], &b"Cold Space"[..9]),
+        (b"Queen", b"Bowie"),
+    ] {
+        let at = bytes.windows(from.len()).position(|w| w == from).unwrap();
+        bytes[at..at + from.len()].copy_from_slice(to);
+    }
     let mtime = mtime_secs(&old);
     fs::remove_file(&old).unwrap();
     let new = lib.root().join("b.mp3");
@@ -252,15 +266,64 @@ fn prefilter_link_reverted_on_mismatch() {
     assert!(events[0].tracks_hidden.contains(&id));
     assert!(!events[0].albums_touched.is_empty());
 
-    // The original file comes back: the old track must show its own tags again, not
-    // those of the file it was wrongly linked to.
+    // The original file comes back: ONE scan must be enough for the old track to show
+    // its own metadata again, not that of the file it was wrongly linked to.
     fs::remove_file(&new).unwrap();
     fs::write(&old, original).unwrap();
     set_mtime(&old, mtime);
     lib.scan();
     assert_eq!(lib.present_at("a.mp3"), Some(id.clone()));
-    lib.scan();
     assert_eq!(lib.row(&id).title.as_deref(), Some("Song"));
+    assert_eq!(
+        lib.text(&format!(
+            "SELECT group_concat(a.title) FROM tracks t
+             JOIN library_albums a ON a.id = t.library_album_id
+             WHERE t.public_id = '{id}'"
+        )),
+        "Hot Space"
+    );
+    assert_eq!(
+        lib.text(&format!(
+            "SELECT group_concat(ta.credited_name) FROM track_artists ta
+             JOIN tracks t ON t.id = ta.track_id WHERE t.public_id = '{id}'"
+        )),
+        "Queen"
+    );
+}
+
+/// Retagging a track that was hashed must not merge it into a missing track with the
+/// same audio (the same file in an album and in a compilation, one copy deleted).
+#[test]
+fn retagged_established_track_is_not_merged_into_missing_duplicate() {
+    let lib = Lib::new();
+    lib.add("Album/song.mp3", "Song");
+    lib.add("Compilation/song.mp3", "Song");
+    lib.add("keep.mp3", "Another one, much longer than the rest");
+    lib.scan();
+    let album = lib.present_at("Album/song.mp3").unwrap();
+    let compilation = lib.present_at("Compilation/song.mp3").unwrap();
+    lib.hash();
+    assert_eq!(
+        lib.row(&album).content_hash,
+        lib.row(&compilation).content_hash
+    );
+
+    fs::remove_file(lib.root().join("Compilation/song.mp3")).unwrap();
+    lib.scan();
+    assert_eq!(lib.row(&compilation).state, "missing");
+
+    // The kept copy is retagged: new size and modification time, same audio.
+    lib.add("Album/song.mp3", "Song (2011 Remaster), retagged");
+    let (scan, _) = lib.scan();
+    assert_eq!(scan.changed, 1);
+    let (report, _) = lib.hash();
+    assert_eq!(report.merged, 0);
+
+    assert_eq!(lib.present_at("Album/song.mp3"), Some(album.clone()));
+    assert_eq!(lib.row(&album).hash_state, "done");
+    assert_eq!(lib.row(&compilation).state, "missing");
+    assert_eq!(lib.count("SELECT count(*) FROM tracks"), 3);
+    assert_eq!(lib.count("SELECT count(*) FROM id_redirects"), 0);
 }
 
 /// Personal data on both tracks of a relink: the kept track and the absorbed one.
