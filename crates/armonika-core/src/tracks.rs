@@ -842,7 +842,7 @@ pub fn last_modified(conn: &Connection, scope: &Scope<'_>) -> Result<i64> {
     let tracks: Option<i64> = conn.query_row(
         &format!(
             "SELECT MAX(updated_at) FROM tracks
-             WHERE state = 'present' AND library_id IN ({libs})"
+             WHERE library_id IN ({libs})"
         ),
         [],
         |r| r.get(0),

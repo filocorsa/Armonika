@@ -626,3 +626,26 @@ async fn artist_with_only_missing_tracks_is_not_listed() {
     let v = call(&app, "getArtists", &ann(), "").await;
     assert_eq!(names(&Value::Array(all_artists(&v))), ["Staying"]);
 }
+
+#[tokio::test]
+async fn indexes_change_when_a_track_is_removed() {
+    let app = app_empty().await;
+    app.put(&app.music_a, "1.mp3", &song("Old", "Band", "LP", 1));
+    app.scan();
+    app.put(&app.music_a, "2.mp3", &song("New", "Band", "LP", 2));
+    app.scan();
+    let v = call(&app, "getIndexes", &ann(), "").await;
+    let last = v["indexes"]["lastModified"].as_i64().unwrap();
+    // Removing the older track must still look like a change.
+    std::fs::remove_file(app.music_a.join("1.mp3")).unwrap();
+    app.scan();
+    let v = call(
+        &app,
+        "getIndexes",
+        &ann(),
+        &format!("ifModifiedSince={last}"),
+    )
+    .await;
+    assert!(v["indexes"]["lastModified"].as_i64().unwrap() > last);
+    assert!(v["indexes"].get("index").is_some());
+}
