@@ -15,6 +15,7 @@ anyhow = "1.0.104"
 armonika-core = { path = "../armonika-core" }
 armonika-scanner = { path = "../armonika-scanner" }
 armonika-search = { path = "../armonika-search" }
+armonika-subsonic = { path = "../armonika-subsonic" }
 axum = "0.8.9"
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }

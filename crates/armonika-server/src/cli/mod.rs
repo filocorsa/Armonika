@@ -24,5 +24,8 @@ pub fn open_db(config: &Config) -> anyhow::Result<Db> {
 pub fn open_store(config: &Config) -> anyhow::Result<(Db, SecretBox)> {
     let db = open_db(config)?;
     let secrets = SecretBox::load_or_create(&config.data_dir)?;
+    // A key that is not the one the database was sealed with must stop everything
+    // here, naming where the key came from, instead of failing later in odd ways.
+    db.write_blocking(|c| armonika_core::secret::check_canary(c, &secrets))?;
     Ok((db, secrets))
 }

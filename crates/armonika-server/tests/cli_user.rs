@@ -147,3 +147,30 @@ fn password_never_in_output() {
     assert!(ok, "{out}{err}");
     assert!(!out.contains(key.trim()));
 }
+
+#[test]
+fn a_changed_secret_key_stops_the_command_and_names_its_source() {
+    let dir = tempfile::tempdir().unwrap();
+    // Creates the data directory, its secret.key and the canary.
+    let (ok, out, err) = armonika(
+        dir.path(),
+        &["user", "create", "alice", "--admin", "--password-stdin"],
+        "correct horse\n",
+    );
+    assert!(ok, "{out}{err}");
+    // Same data directory, another key from the environment.
+    let wrong = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let out = assert_cmd::Command::cargo_bin("armonika")
+        .unwrap()
+        .args(["user", "list"])
+        .env_remove("ARMONIKA_CONFIG")
+        .env("ARMONIKA_SECRET_KEY", wrong)
+        .env("ARMONIKA_DATA_DIR", dir.path().join("data"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("ARMONIKA_SECRET_KEY"), "{err}");
+    assert!(!err.contains(wrong), "{err}");
+}

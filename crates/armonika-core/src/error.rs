@@ -57,6 +57,18 @@ pub enum Error {
     /// Sealed data is truncated, was tampered with or was sealed with another key.
     #[error("sealed data cannot be decrypted (wrong secret key or corrupted data)")]
     Decrypt,
+    /// The secret key is not the one the database was sealed with.
+    #[error(
+        "{from} is not the secret key this database was created with; restore the original key, \
+         or the stored Subsonic passwords cannot be read"
+    )]
+    SecretKeyMismatch {
+        /// Where the key came from.
+        from: String,
+    },
+    /// A stored permission is neither `listen` nor `manage`.
+    #[error("invalid stored permission {0:?}")]
+    InvalidPermission(String),
     /// Hashing a password failed.
     #[error("password hashing failed: {0}")]
     PasswordHash(String),

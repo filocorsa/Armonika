@@ -12,6 +12,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Error, Result};
 
@@ -29,6 +30,7 @@ const NONCE_LEN: usize = 24;
 #[derive(Clone)]
 pub struct SecretBox {
     cipher: XChaCha20Poly1305,
+    source: Option<KeySource>,
 }
 
 impl std::fmt::Debug for SecretBox {
@@ -42,6 +44,14 @@ impl SecretBox {
     pub fn from_key(key: [u8; KEY_LEN]) -> SecretBox {
         SecretBox {
             cipher: XChaCha20Poly1305::new(&key.into()),
+            source: None,
+        }
+    }
+
+    fn from_source(key: [u8; KEY_LEN], source: KeySource) -> SecretBox {
+        SecretBox {
+            source: Some(source),
+            ..SecretBox::from_key(key)
         }
     }
 
@@ -70,15 +80,19 @@ impl SecretBox {
     /// is reported, never replaced, because data sealed with it would be lost.
     pub fn load_or_create_with(data_dir: &Path, env_key: Option<&str>) -> Result<SecretBox> {
         if let Some(b64) = env_key.filter(|v| !v.trim().is_empty()) {
-            return Ok(SecretBox::from_key(decode_key(b64, KeySource::Env)?));
+            return Ok(SecretBox::from_source(
+                decode_key(b64, KeySource::Env)?,
+                KeySource::Env,
+            ));
         }
         let path = data_dir.join(KEY_FILE);
         let file_error = |source| Error::SecretKeyFile {
             path: path.clone(),
             source,
         };
+        let source = KeySource::File(path.clone());
         if let Some(key) = read_key_file(&path)? {
-            return Ok(SecretBox::from_key(key));
+            return Ok(SecretBox::from_source(key, source));
         }
 
         let mut key = [0; KEY_LEN];
@@ -106,13 +120,20 @@ impl SecretBox {
             linked = write_new_file(&path, &key);
         }
         match linked {
-            Ok(()) => Ok(SecretBox::from_key(key)),
+            Ok(()) => Ok(SecretBox::from_source(key, source)),
             // Another process created it in the meantime: use theirs.
             Err(e) if e.kind() == ErrorKind::AlreadyExists => read_key_file(&path)?
-                .map(SecretBox::from_key)
+                .map(|key| SecretBox::from_source(key, source))
                 .ok_or_else(|| file_error(e)),
             Err(e) => Err(file_error(e)),
         }
+    }
+
+    /// Describes where the key came from, for error messages; never the key itself.
+    fn describe_source(&self) -> String {
+        self.source
+            .as_ref()
+            .map_or_else(|| "the secret key in use".to_owned(), ToString::to_string)
     }
 
     /// Encrypts `plain` with a fresh random nonce.
@@ -141,6 +162,54 @@ impl SecretBox {
             .decrypt(&nonce, ciphertext)
             .map_err(|_| Error::Decrypt)
     }
+}
+
+/// Name of the `settings` row that holds the canary.
+const CANARY_SETTING: &str = "secret_canary";
+
+const CANARY_PLAIN: &[u8] = b"armonika secret key canary";
+
+/// Checks at startup that `sb` is the key this database was sealed with, so a changed or
+/// wrong key fails loudly instead of every Subsonic login failing without a reason.
+///
+/// A canary (a known text sealed with the key) is kept in `settings`. If it is missing
+/// the key is first checked against the Subsonic password of an existing user, if any
+/// (databases from before the canary), then the canary is stored. Fails with
+/// [`Error::SecretKeyMismatch`], naming where the key came from, if the key is wrong.
+pub fn check_canary(conn: &Connection, sb: &SecretBox) -> Result<()> {
+    let mismatch = || Error::SecretKeyMismatch {
+        from: sb.describe_source(),
+    };
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [CANARY_SETTING],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(stored) = stored {
+        let sealed = STANDARD.decode(stored).map_err(|_| mismatch())?;
+        return match sb.open(&sealed) {
+            Ok(plain) if plain == CANARY_PLAIN => Ok(()),
+            _ => Err(mismatch()),
+        };
+    }
+    let sample: Option<Vec<u8>> = conn
+        .query_row("SELECT subsonic_password FROM users LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(sealed) = sample
+        && sb.open(&sealed).is_err()
+    {
+        return Err(mismatch());
+    }
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![CANARY_SETTING, STANDARD.encode(sb.seal(CANARY_PLAIN))],
+    )?;
+    Ok(())
 }
 
 /// Where a secret key came from, for error messages.
