@@ -16,6 +16,7 @@ use armonika_core::db::Db;
 use armonika_core::ids::LibraryId;
 pub use armonika_core::model::LibraryChange;
 
+pub mod hasher;
 mod reconcile;
 mod walk;
 

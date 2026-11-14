@@ -389,7 +389,7 @@ fn read_chunk(pool: Option<&rayon::ThreadPool>, chunk: &[Job]) -> Vec<Read> {
 
 /// Reads one file; a panic of the tag reader on a malformed file is an error of that
 /// file only.
-fn read_isolated(path: &Path) -> Result<FileFacts, String> {
+pub(crate) fn read_isolated(path: &Path) -> Result<FileFacts, String> {
     read_isolated_with(path, read_file)
 }
 
@@ -416,23 +416,23 @@ fn read_isolated_with(
 
 /// What one transaction changed, for its [`LibraryChange`].
 #[derive(Default)]
-struct Change {
-    upserted: BTreeSet<TrackId>,
-    hidden: BTreeSet<TrackId>,
-    albums: BTreeSet<LibraryAlbumId>,
-    artists: BTreeSet<ArtistId>,
+pub(crate) struct Change {
+    pub(crate) upserted: BTreeSet<TrackId>,
+    pub(crate) hidden: BTreeSet<TrackId>,
+    pub(crate) albums: BTreeSet<LibraryAlbumId>,
+    pub(crate) artists: BTreeSet<ArtistId>,
 }
 
 impl Change {
     /// Adds the artists of the albums touched so far: their album lists changed.
-    fn add_album_artists(&mut self, tx: &Transaction<'_>) -> armonika_core::Result<()> {
+    pub(crate) fn add_album_artists(&mut self, tx: &Transaction<'_>) -> armonika_core::Result<()> {
         for album in &self.albums {
             self.artists.extend(album_artist_ids(tx, album)?);
         }
         Ok(())
     }
 
-    fn emit(self, library: LibraryId, changes: &dyn Fn(LibraryChange)) {
+    pub(crate) fn emit(self, library: LibraryId, changes: &dyn Fn(LibraryChange)) {
         let event = LibraryChange {
             library,
             tracks_upserted: self.upserted.into_iter().collect(),
@@ -527,7 +527,7 @@ fn apply(
 }
 
 /// Writes `facts` into the existing track `id` at `rel` and relinks its artists.
-fn write_track(
+pub(crate) fn write_track(
     tx: &Transaction<'_>,
     library: LibraryId,
     id: &TrackId,
@@ -543,7 +543,7 @@ fn write_track(
 }
 
 /// Links the artists and the album of a track whose tags were just written.
-fn link_new(
+pub(crate) fn link_new(
     tx: &Transaction<'_>,
     library: LibraryId,
     id: &TrackId,

@@ -13,11 +13,12 @@ workspace = true
 armonika-core = { path = "../armonika-core" }
 armonika-media = { path = "../armonika-media" }
 rayon = "1.12.0"
+rusqlite = "0.41.1"
 thiserror = "2.0.21"
+tokio-util = "0.7.20"
 tracing = "0.1.44"
 walkdir = "2.5.0"
 
 [dev-dependencies]
 armonika-testdata = { path = "../../bench/testdata" }
-rusqlite = "0.41.1"
 tempfile = "3.27.0"
