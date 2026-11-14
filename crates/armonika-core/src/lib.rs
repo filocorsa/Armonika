@@ -13,6 +13,7 @@ pub mod search_source;
 pub mod secret;
 pub mod text;
 pub mod track_files;
+pub mod tracks;
 pub mod users;
 
 pub use error::{Error, Result};

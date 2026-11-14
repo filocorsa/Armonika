@@ -1,6 +1,7 @@
 //! The OpenSubsonic API of the Armonika music server, served under `/rest`.
 
 mod auth;
+mod browse;
 mod error;
 mod response;
 mod system;
@@ -160,6 +161,21 @@ async fn dispatch(state: &AppState, method: &str, params: &Params) -> Result<Pay
         "getUser" => system::get_user(state, &access, params).await,
         "getScanStatus" => Ok(system::get_scan_status(state, &access)),
         "startScan" => system::start_scan(state, &access),
+        "getArtists" => browse::get_artists(state, &access, params).await,
+        "getIndexes" => browse::get_indexes(state, &access, params).await,
+        "getArtist" => browse::get_artist(state, &access, params).await,
+        "getAlbum" => browse::get_album(state, &access, params).await,
+        "getSong" => browse::get_song(state, &access, params).await,
+        "getMusicDirectory" => browse::get_music_directory(state, &access, params).await,
+        "getGenres" => browse::get_genres(state, &access, params).await,
+        "getAlbumList2" => browse::get_album_list2(state, &access, params).await,
+        "getAlbumList" => browse::get_album_list(state, &access, params).await,
+        "getRandomSongs" => browse::get_random_songs(state, &access, params).await,
+        "getSongsByGenre" => browse::get_songs_by_genre(state, &access, params).await,
+        "getArtistInfo2" => browse::get_artist_info2(params),
+        "getAlbumInfo2" => browse::get_album_info2(params),
+        "getTopSongs" => Ok(browse::get_top_songs()),
+        "getSimilarSongs2" => Ok(browse::get_similar_songs2()),
         _ => Err(ApiError::not_implemented()),
     }
 }

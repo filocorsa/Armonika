@@ -203,6 +203,7 @@ dependencies = [
  "armonika-core",
  "armonika-scanner",
  "armonika-search",
+ "armonika-testdata",
  "axum",
  "form_urlencoded",
  "md-5",

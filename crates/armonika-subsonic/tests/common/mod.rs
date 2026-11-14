@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::fmt::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use armonika_core::access::{self, Permission};
@@ -14,6 +15,8 @@ use armonika_scanner::ScanOptions;
 use armonika_scanner::controller::ScanController;
 use armonika_search::{SearchIndex, TantivyIndex};
 use armonika_subsonic::{AppState, MediaConfig, ScrobbleSink, router};
+use armonika_testdata::AudioFormat as TestFormat;
+use armonika_testdata::fixture::{FixtureTags, tagged_file};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
@@ -26,6 +29,8 @@ pub const ANN_PASSWORD: &str = "ann-password";
 /// A server with the users `admin` (admin) and `ann` (listen on library A, no download),
 /// the libraries A (3 tracks) and B, and an API key of `ann`.
 pub struct App {
+    pub music_a: PathBuf,
+    pub music_b: PathBuf,
     pub router: Router,
     pub db: Db,
     pub lib_a: LibraryId,
@@ -35,6 +40,16 @@ pub struct App {
 }
 
 pub async fn app() -> App {
+    build(true).await
+}
+
+/// Same as [`app`] but without the three tracks of library A: music comes from files
+/// written with [`App::put`] and read with [`App::scan`].
+pub async fn app_empty() -> App {
+    build(false).await
+}
+
+async fn build(with_tracks: bool) -> App {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("armonika.db")).unwrap();
     let secrets = SecretBox::from_key([9; 32]);
@@ -61,7 +76,7 @@ pub async fn app() -> App {
             access::grant(c, &ann, lib_a, Permission::Listen)?;
             let key = users::create_api_key(c, &ann, "test")?;
             let tx = c.transaction()?;
-            for n in 1..=3 {
+            for n in 1..=if with_tracks { 3 } else { 0 } {
                 let facts = FileFacts {
                     size: 1,
                     mtime_ms: 1,
@@ -95,15 +110,57 @@ pub async fn app() -> App {
         scans,
         media: MediaConfig::default(),
         scrobbles: ScrobbleSink::default(),
-        ignored_articles: Vec::new(),
+        ignored_articles: "The El La Los Las Le Les Il Lo Gli I"
+            .split_whitespace()
+            .map(String::from)
+            .collect(),
     };
     App {
+        music_a: dir.path().join("a"),
+        music_b: dir.path().join("b"),
         router: router(state),
         db,
         lib_a,
         lib_b,
         ann_key,
         _dir: dir,
+    }
+}
+
+impl App {
+    /// Writes an mp3 with `tags` at `rel` in the music folder `root` (`music_a` or
+    /// `music_b`).
+    pub fn put(&self, root: &std::path::Path, rel: &str, tags: &FixtureTags) {
+        let path = root.join(rel);
+        let dir = path.parent().unwrap();
+        std::fs::create_dir_all(dir).unwrap();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        tagged_file(dir, name, TestFormat::Mp3, tags);
+    }
+
+    /// Scans both libraries.
+    pub fn scan(&self) {
+        for lib in [self.lib_a, self.lib_b] {
+            armonika_scanner::scan_library(
+                &self.db,
+                lib,
+                armonika_scanner::ScanOptions {
+                    threads: 2,
+                    batch: 500,
+                },
+                &|_| {},
+                &|_| {},
+            )
+            .unwrap();
+        }
+    }
+
+    /// Runs `sql` on the writer connection.
+    pub async fn exec(&self, sql: &'static str) {
+        self.db
+            .write(move |c| Ok(c.execute_batch(sql)?))
+            .await
+            .unwrap();
     }
 }
 

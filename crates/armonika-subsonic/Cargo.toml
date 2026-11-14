@@ -22,6 +22,7 @@ tokio = { version = "1.54.1", features = ["rt", "time"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
+armonika-testdata = { path = "../../bench/testdata" }
 roxmltree = "0.21.2"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
