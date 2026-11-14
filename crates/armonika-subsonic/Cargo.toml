@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 armonika-core = { path = "../armonika-core" }
+armonika-media = { path = "../armonika-media" }
 armonika-scanner = { path = "../armonika-scanner" }
 armonika-search = { path = "../armonika-search" }
 axum = "0.8.9"
@@ -19,9 +20,12 @@ md-5 = "0.11.0"
 serde_json = "1.0.154"
 subtle = "2.6.1"
 tokio = { version = "1.54.1", features = ["rt", "time"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.6.11", default-features = false, features = ["fs"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 armonika-testdata = { path = "../../bench/testdata" }
 roxmltree = "0.21.2"
 tempfile = "3.27.0"

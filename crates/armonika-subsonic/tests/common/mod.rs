@@ -34,6 +34,8 @@ pub struct App {
     pub router: Router,
     pub db: Db,
     pub search: Arc<dyn SearchIndex>,
+    pub scans: ScanController,
+    pub cache_dir: PathBuf,
     pub lib_a: LibraryId,
     pub lib_b: LibraryId,
     pub ann_key: String,
@@ -104,12 +106,16 @@ async fn build(with_tracks: bool) -> App {
         Arc::new(TantivyIndex::open(&dir.path().join("search")).unwrap());
     let (changes, _rx) = tokio::sync::mpsc::unbounded_channel();
     let scans = ScanController::new(db.clone(), ScanOptions::default(), changes);
+    let cache_dir = dir.path().join("data").join("cache").join("covers");
     let state = AppState {
         db: db.clone(),
         secrets: Arc::new(secrets),
         search: search.clone(),
-        scans,
-        media: MediaConfig::default(),
+        scans: scans.clone(),
+        media: MediaConfig {
+            cover_cache_dir: cache_dir.clone(),
+            ..MediaConfig::default()
+        },
         scrobbles: ScrobbleSink::default(),
         ignored_articles: "The El La Los Las Le Les Il Lo Gli I"
             .split_whitespace()
@@ -122,6 +128,8 @@ async fn build(with_tracks: bool) -> App {
         router: router(state),
         db,
         search,
+        scans,
+        cache_dir,
         lib_a,
         lib_b,
         ann_key,
@@ -177,6 +185,7 @@ pub struct Reply {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: String,
+    pub bytes: Vec<u8>,
 }
 
 impl Reply {
@@ -188,15 +197,29 @@ impl Reply {
 }
 
 pub async fn get(app: &App, uri: &str) -> Reply {
-    send(app, Method::GET, uri, None).await
+    send(app, Method::GET, uri, None, &[]).await
+}
+
+/// A GET with extra request headers.
+pub async fn get_with(app: &App, uri: &str, headers: &[(&str, &str)]) -> Reply {
+    send(app, Method::GET, uri, None, headers).await
 }
 
 pub async fn post_form(app: &App, uri: &str, form: &str) -> Reply {
-    send(app, Method::POST, uri, Some(form)).await
+    send(app, Method::POST, uri, Some(form), &[]).await
 }
 
-async fn send(app: &App, method: Method, uri: &str, form: Option<&str>) -> Reply {
+async fn send(
+    app: &App,
+    method: Method,
+    uri: &str,
+    form: Option<&str>,
+    headers: &[(&str, &str)],
+) -> Reply {
     let mut req = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
     if form.is_some() {
         req = req.header("content-type", "application/x-www-form-urlencoded");
     }
@@ -210,7 +233,8 @@ async fn send(app: &App, method: Method, uri: &str, form: Option<&str>) -> Reply
     Reply {
         status,
         headers,
-        body: String::from_utf8(bytes.to_vec()).unwrap(),
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+        bytes: bytes.to_vec(),
     }
 }
 

@@ -3,4 +3,5 @@
 //! This crate never writes to a file; lofty and Symphonia are used only to read.
 
 pub mod content_hash;
+pub mod cover;
 pub mod probe;

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 armonika-core = { path = "../armonika-core" }
 blake3 = "1.8.7"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 lofty = "0.25.5"
 symphonia = { version = "0.6.1", features = ["all"] }
 thiserror = "2.0.21"

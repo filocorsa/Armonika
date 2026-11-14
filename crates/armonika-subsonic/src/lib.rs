@@ -3,6 +3,7 @@
 mod auth;
 mod browse;
 mod error;
+mod media;
 mod response;
 mod search;
 mod system;
@@ -18,7 +19,7 @@ use armonika_search::SearchIndex;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
-use axum::http::{Method, Request, header};
+use axum::http::{HeaderMap, Method, Request, header};
 use axum::response::Response;
 use axum::routing::get;
 
@@ -100,6 +101,19 @@ impl Params {
     }
 }
 
+/// What a handler answers: a node of the Subsonic response, or a raw body (audio, an
+/// image) that replaces the response. Errors are always Subsonic errors.
+pub(crate) enum Outcome {
+    Payload(Payload),
+    Raw(Response),
+}
+
+impl From<Payload> for Outcome {
+    fn from(payload: Payload) -> Outcome {
+        Outcome::Payload(payload)
+    }
+}
+
 /// The routes `/rest/{method}` and `/rest/{method}.view`, for GET and POST.
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -113,13 +127,14 @@ async fn handle(
     request: Request<Body>,
 ) -> Response {
     let started = Instant::now();
+    let headers = request.headers().clone();
     let params = read_params(request).await;
     let format = Format::from_param(params.get("f"));
     let method = method.strip_suffix(".view").unwrap_or(&method);
     let result = if params.get("f") == Some("jsonp") {
         Err(ApiError::generic("jsonp is not supported"))
     } else {
-        dispatch(&state, method, &params).await
+        dispatch(&state, method, &params, &headers).await
     };
     if let Err(e) = &result
         && e.is_auth_failure()
@@ -127,7 +142,11 @@ async fn handle(
         // Held here, in this request only: no lock is taken and no thread is blocked.
         tokio::time::sleep(AUTH_FAILURE_DELAY).await;
     }
-    response::render(format, result, started.elapsed())
+    match result {
+        Ok(Outcome::Raw(response)) => response,
+        Ok(Outcome::Payload(payload)) => response::render(format, Ok(payload), started.elapsed()),
+        Err(e) => response::render(format, Err(e), started.elapsed()),
+    }
 }
 
 /// Query string plus, for a POST with a form body, the body.
@@ -152,29 +171,51 @@ async fn read_params(request: Request<Body>) -> Params {
     params
 }
 
-async fn dispatch(state: &AppState, method: &str, params: &Params) -> Result<Payload, ApiError> {
+async fn dispatch(
+    state: &AppState,
+    method: &str,
+    params: &Params,
+    headers: &HeaderMap,
+) -> Result<Outcome, ApiError> {
     let Caller(access) = authenticate(state, params).await?;
+    match method {
+        "stream" => return media::stream(state, &access, params, headers).await,
+        "download" => return media::download(state, &access, params, headers).await,
+        "getCoverArt" => return media::get_cover_art(state, &access, params).await,
+        _ => {}
+    }
+    dispatch_payload(state, method, &access, params)
+        .await
+        .map(Outcome::Payload)
+}
+
+async fn dispatch_payload(
+    state: &AppState,
+    method: &str,
+    access: &armonika_core::access::Access,
+    params: &Params,
+) -> Result<Payload, ApiError> {
     match method {
         "ping" => Ok(system::ping()),
         "getLicense" => Ok(system::get_license()),
         "getOpenSubsonicExtensions" => Ok(system::get_open_subsonic_extensions()),
-        "getMusicFolders" => system::get_music_folders(state, &access).await,
-        "getUser" => system::get_user(state, &access, params).await,
-        "getScanStatus" => Ok(system::get_scan_status(state, &access)),
-        "startScan" => system::start_scan(state, &access),
-        "getArtists" => browse::get_artists(state, &access, params).await,
-        "getIndexes" => browse::get_indexes(state, &access, params).await,
-        "getArtist" => browse::get_artist(state, &access, params).await,
-        "getAlbum" => browse::get_album(state, &access, params).await,
-        "getSong" => browse::get_song(state, &access, params).await,
-        "getMusicDirectory" => browse::get_music_directory(state, &access, params).await,
-        "getGenres" => browse::get_genres(state, &access, params).await,
-        "getAlbumList2" => browse::get_album_list2(state, &access, params).await,
-        "getAlbumList" => browse::get_album_list(state, &access, params).await,
-        "getRandomSongs" => browse::get_random_songs(state, &access, params).await,
-        "getSongsByGenre" => browse::get_songs_by_genre(state, &access, params).await,
-        "search3" => search::search(state, &access, params, "searchResult3").await,
-        "search2" => search::search(state, &access, params, "searchResult2").await,
+        "getMusicFolders" => system::get_music_folders(state, access).await,
+        "getUser" => system::get_user(state, access, params).await,
+        "getScanStatus" => Ok(system::get_scan_status(state, access)),
+        "startScan" => system::start_scan(state, access),
+        "getArtists" => browse::get_artists(state, access, params).await,
+        "getIndexes" => browse::get_indexes(state, access, params).await,
+        "getArtist" => browse::get_artist(state, access, params).await,
+        "getAlbum" => browse::get_album(state, access, params).await,
+        "getSong" => browse::get_song(state, access, params).await,
+        "getMusicDirectory" => browse::get_music_directory(state, access, params).await,
+        "getGenres" => browse::get_genres(state, access, params).await,
+        "getAlbumList2" => browse::get_album_list2(state, access, params).await,
+        "getAlbumList" => browse::get_album_list(state, access, params).await,
+        "getRandomSongs" => browse::get_random_songs(state, access, params).await,
+        "getSongsByGenre" => browse::get_songs_by_genre(state, access, params).await,
+        "search3" => search::search(state, access, params, "searchResult3").await,
+        "search2" => search::search(state, access, params, "searchResult2").await,
         "getArtistInfo2" => browse::get_artist_info2(params),
         "getAlbumInfo2" => browse::get_album_info2(params),
         "getTopSongs" => Ok(browse::get_top_songs()),
