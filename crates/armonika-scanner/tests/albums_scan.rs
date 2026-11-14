@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use armonika_core::albums::{self, LibraryAlbum};
 use armonika_core::db::Db;
-use armonika_core::ids::{LibraryAlbumId, LibraryId, TrackId, resolve_album};
+use armonika_core::ids::{ArtistId, LibraryAlbumId, LibraryId, TrackId, resolve_album};
 use armonika_core::libraries;
 use armonika_core::model::PartialDate;
 use armonika_scanner::{LibraryChange, ScanOptions, scan_library};
@@ -627,5 +627,45 @@ fn rescan_without_changes_touches_no_album() {
     assert_eq!(
         lib.count("SELECT max(updated_at) FROM library_albums"),
         updated
+    );
+}
+
+#[test]
+fn artist_dropped_from_an_album_credit_is_reported() {
+    let lib = Lib::new();
+    let release = s("22222222-2222-2222-2222-222222222222");
+    for (rel, album_artist) in [
+        ("x/1.mp3", "Old Band"),
+        ("x/2.mp3", "Old Band"),
+        ("x/3.mp3", "New Band"),
+    ] {
+        let mut tags = album_song(rel, "Abbey Road", album_artist);
+        tags.artist_credit = s("Soloist");
+        tags.mb_release_id = release.clone();
+        lib.put(rel, &tags);
+    }
+    lib.scan();
+    let old: ArtistId = lib
+        .db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT public_id FROM artists WHERE name = 'Old Band'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    let album = lib.album_of("x/1.mp3");
+    assert_eq!(lib.album_artists(&album), ["Old Band"]);
+
+    // The tracks that carried "Old Band" go: the album credit becomes "New Band" and
+    // search must hear that "Old Band" lost the album.
+    lib.remove("x/1.mp3");
+    lib.remove("x/2.mp3");
+    let events = lib.scan();
+    assert_eq!(lib.album_artists(&album), ["New Band"]);
+    assert!(
+        events.iter().any(|e| e.artists_touched.contains(&old)),
+        "{events:?}"
     );
 }

@@ -233,6 +233,21 @@ pub fn album_artist_ids(conn: &Connection, album: &LibraryAlbumId) -> Result<Vec
         .collect::<rusqlite::Result<_>>()?)
 }
 
+/// Every artist linked to an album of `library`, hidden albums included. The scanner
+/// compares it before and after [`reconcile_albums`] to learn which artists left an
+/// album credit.
+pub fn linked_artist_ids(conn: &Connection, library: LibraryId) -> Result<BTreeSet<ArtistId>> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT DISTINCT a.public_id FROM album_artists l
+             JOIN library_albums al ON al.id = l.album_id
+             JOIN artists a ON a.id = l.artist_id
+             WHERE al.library_id = ?1",
+        )?
+        .query_map([library.0], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 /// Whether the album folder of the track `track` holds other present tracks of
 /// `library` with the same album title (normalized) and a different artist credit,
 /// counting only tracks without album artist tag (plan decision 2). Read from the
