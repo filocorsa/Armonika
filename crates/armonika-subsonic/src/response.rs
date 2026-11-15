@@ -180,7 +180,8 @@ fn escape(s: &str) -> String {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
             '\t' | '\n' | '\r' => out.push(c),
-            c if c.is_control() => {}
+            // U+FFFE and U+FFFF are not legal in XML 1.0.
+            c if c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}') => {}
             c => out.push(c),
         }
     }
@@ -206,6 +207,13 @@ mod tests {
             "<node id=\"a&amp;b\"><child n=\"3\" ok=\"true\"/>\
              <tags>x&lt;y</tags><tags>z</tags></node>"
         );
+    }
+
+    #[test]
+    fn escape_drops_characters_xml_cannot_hold() {
+        assert_eq!(escape("a\u{FFFE}b\u{FFFF}c\u{0}d\u{7}e"), "abcde");
+        assert_eq!(escape("t\tn\nr\r"), "t\tn\nr\r");
+        assert_eq!(escape("\u{FFFD}\u{10FFFF}"), "\u{FFFD}\u{10FFFF}");
     }
 
     #[test]
