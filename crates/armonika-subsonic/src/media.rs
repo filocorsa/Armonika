@@ -7,7 +7,7 @@
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use armonika_core::access::Access;
@@ -253,6 +253,14 @@ impl Source {
             Source::Folder(p) | Source::Embedded(p) => p,
         }
     }
+
+    /// The part of a cache name that tells the kind of source.
+    fn kind(&self) -> &'static str {
+        match self {
+            Source::Folder(_) => "folder",
+            Source::Embedded(_) => "embedded",
+        }
+    }
 }
 
 pub(crate) async fn get_cover_art(
@@ -332,10 +340,11 @@ fn mtime_ms(path: &Path) -> Option<u128> {
     Some(modified.duration_since(UNIX_EPOCH).ok()?.as_millis())
 }
 
-fn cache_name(id: &str, size: Option<u32>, mtime: u128) -> String {
+fn cache_name(id: &str, source: &Source, size: Option<u32>, mtime: u128) -> String {
+    let kind = source.kind();
     match size {
-        Some(size) => format!("{id}-{size}-{mtime}.jpg"),
-        None => format!("{id}-orig-{mtime}.jpg"),
+        Some(size) => format!("{id}-{kind}-{size}-{mtime}.jpg"),
+        None => format!("{id}-{kind}-orig-{mtime}.jpg"),
     }
 }
 
@@ -362,16 +371,22 @@ fn cover_bytes(
         .filter_map(|s| mtime_ms(s.path()).map(|m| (s, m)))
         .collect();
 
-    // A cover already made for one of the places, in order of preference.
-    for (_, mtime) in &candidates {
-        if let Ok(bytes) = fs::read(cache_dir.join(cache_name(id, size, *mtime))) {
-            return with_type(bytes);
-        }
-    }
+    // In order of preference: the cover already made for a place, else the picture of
+    // the place. The next place is tried only when this one has no picture.
     for (source, mtime) in &candidates {
+        let name = cache_name(id, source, size, *mtime);
+        if let Ok(bytes) = fs::read(cache_dir.join(&name))
+            && let Some(found) = with_type(bytes)
+        {
+            return Some(found);
+        }
         let Some(original) = read_source(source) else {
             continue;
         };
+        // Bytes that are not a known image are no picture.
+        if with_type(original.clone()).is_none() {
+            continue;
+        }
         let bytes = match size {
             Some(size) => match cover::resize(&original, size) {
                 Ok(bytes) => bytes,
@@ -382,7 +397,7 @@ fn cover_bytes(
             },
             None => original,
         };
-        store(cache_dir, &cache_name(id, size, *mtime), &bytes);
+        store(cache_dir, &name, &bytes);
         return with_type(bytes);
     }
     None
@@ -406,7 +421,13 @@ fn read_source(source: &Source) -> Option<Vec<u8>> {
 /// failure only costs the cache.
 fn store(cache_dir: &Path, name: &str, bytes: &[u8]) {
     let result = fs::create_dir_all(cache_dir).and_then(|()| {
-        let tmp = cache_dir.join(format!("{name}.tmp"));
+        // Unique per write, so two requests for the same cover never share a file.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let tmp = cache_dir.join(format!(
+            "{name}.{}-{}.tmp",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::write(&tmp, bytes)?;
         fs::rename(&tmp, cache_dir.join(name))
     });
@@ -415,7 +436,8 @@ fn store(cache_dir: &Path, name: &str, bytes: &[u8]) {
     }
 }
 
-/// `bytes` with the content type their first bytes show.
+/// `bytes` with the content type their first bytes show; `None` if they are not a known
+/// image (an empty source included).
 fn with_type(bytes: Vec<u8>) -> Option<(Vec<u8>, &'static str)> {
     let mime = if bytes.starts_with(&[0xFF, 0xD8]) {
         "image/jpeg"
@@ -424,7 +446,7 @@ fn with_type(bytes: Vec<u8>) -> Option<(Vec<u8>, &'static str)> {
     } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         "image/webp"
     } else {
-        "application/octet-stream"
+        return None;
     };
     Some((bytes, mime))
 }

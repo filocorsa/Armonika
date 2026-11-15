@@ -134,6 +134,69 @@ async fn embedded_cover_beats_folder_for_a_track() {
     assert_eq!(reply.bytes, cover_jpeg());
 }
 
+/// A small jpeg that differs from `cover_jpeg()`.
+fn other_jpeg() -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbImage::new(2, 2)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    assert_ne!(out, cover_jpeg());
+    out
+}
+
+#[tokio::test]
+async fn album_with_embedded_and_folder_images_prefers_the_folder() {
+    let app = app_empty().await;
+    let mut with_cover = tags("One");
+    with_cover.cover = Some(cover_jpeg());
+    app.put(&app.music_a, "Album/one.mp3", &with_cover);
+    fs::write(app.music_a.join("Album").join("cover.jpg"), other_jpeg()).unwrap();
+    app.scan();
+    let (track, album) = first_song(&app, &admin()).await;
+    let reply = get(&app, &format!("/rest/getCoverArt?{}&id={album}", ann())).await;
+    assert_eq!(reply.bytes, other_jpeg());
+    let reply = get(&app, &format!("/rest/getCoverArt?{}&id={track}", ann())).await;
+    assert_eq!(reply.bytes, cover_jpeg());
+    // Again, from the cache: the same answers.
+    let reply = get(&app, &format!("/rest/getCoverArt?{}&id={album}", ann())).await;
+    assert_eq!(reply.bytes, other_jpeg());
+    let reply = get(&app, &format!("/rest/getCoverArt?{}&id={track}", ann())).await;
+    assert_eq!(reply.bytes, cover_jpeg());
+}
+
+#[tokio::test]
+async fn a_folder_image_added_later_beats_a_cached_embedded_cover() {
+    let app = app_empty().await;
+    let mut with_cover = tags("One");
+    with_cover.cover = Some(cover_jpeg());
+    app.put(&app.music_a, "Album/one.mp3", &with_cover);
+    app.scan();
+    let (_, album) = first_song(&app, &admin()).await;
+    let uri = format!("/rest/getCoverArt?{}&id={album}", ann());
+    assert_eq!(get(&app, &uri).await.bytes, cover_jpeg());
+    fs::write(app.music_a.join("Album").join("cover.jpg"), other_jpeg()).unwrap();
+    assert_eq!(get(&app, &uri).await.bytes, other_jpeg());
+}
+
+#[tokio::test]
+async fn an_empty_or_unrecognised_folder_image_is_no_picture() {
+    let app = app_empty().await;
+    let mut with_cover = tags("One");
+    with_cover.cover = Some(cover_jpeg());
+    app.put(&app.music_a, "Album/one.mp3", &with_cover);
+    app.scan();
+    let (_, album) = first_song(&app, &admin()).await;
+    let uri = format!("/rest/getCoverArt?{}&id={album}", ann());
+    let folder = app.music_a.join("Album").join("cover.jpg");
+    fs::write(&folder, b"").unwrap();
+    assert_eq!(get(&app, &uri).await.bytes, cover_jpeg());
+    fs::write(&folder, b"this is not an image").unwrap();
+    assert_eq!(get(&app, &uri).await.bytes, cover_jpeg());
+}
+
 #[tokio::test]
 async fn no_cover_is_70() {
     let app = app_empty().await;
@@ -163,7 +226,7 @@ async fn cover_resized_and_cached() {
         .collect();
     assert_eq!(cached.len(), 1);
     let name = cached[0].file_name().unwrap().to_str().unwrap();
-    assert!(name.starts_with(&format!("{album}-4-")), "{name}");
+    assert!(name.starts_with(&format!("{album}-folder-4-")), "{name}");
     assert!(name.ends_with(".jpg"), "{name}");
     assert_eq!(fs::read(&cached[0]).unwrap(), first.bytes);
 
