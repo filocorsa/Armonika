@@ -76,6 +76,38 @@ fn require_visible(
     Ok(())
 }
 
+/// The ids of `tracks` the caller can see, in their order and with their repeats.
+fn keep_visible(
+    conn: &Connection,
+    access: &Access,
+    tracks: &[TrackId],
+) -> armonika_core::Result<Vec<TrackId>> {
+    let libs = access.visible(None);
+    let scope = Scope {
+        libs: &libs,
+        user: &access.user,
+        articles: &[],
+    };
+    let mut unique: Vec<TrackId> = Vec::new();
+    for id in tracks {
+        if !unique.contains(id) {
+            unique.push(id.clone());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    // In chunks, to stay under the limit of bound values of SQLite.
+    for chunk in unique.chunks(400) {
+        for view in tracks::tracks_by_ids(conn, &scope, chunk)? {
+            seen.insert(view.id);
+        }
+    }
+    Ok(tracks
+        .iter()
+        .filter(|id| seen.contains(*id))
+        .cloned()
+        .collect())
+}
+
 pub async fn get_playlists(state: &AppState, access: &Access) -> Result<Payload, ApiError> {
     let viewer = access.clone();
     let list = state.db.read(move |c| playlists::list(c, &viewer)).await?;
@@ -197,12 +229,8 @@ pub async fn save_play_queue(
     params: &Params,
 ) -> Result<Payload, ApiError> {
     let songs = track_ids(params, "id")?;
-    // `current` is a track id; with repeats the first occurrence stands for it.
-    let current = match params.get("current") {
-        Some(raw) => {
-            let id: TrackId = raw.parse().map_err(|_| ApiError::not_found())?;
-            songs.iter().position(|s| *s == id)
-        }
+    let wanted = match params.get("current") {
+        Some(raw) => Some(raw.parse::<TrackId>().map_err(|_| ApiError::not_found())?),
         None => None,
     };
     let position_ms: i64 = params
@@ -214,8 +242,13 @@ pub async fn save_play_queue(
     state
         .db
         .write(move |c| {
-            require_visible(c, &editor, &songs)?;
-            play_queue::save(c, &editor.user, &songs, current, position_ms, &client)
+            // Tracks the caller cannot see are left out of the saved queue. `current` is a
+            // track id; with repeats the first occurrence stands for it.
+            let kept = keep_visible(c, &editor, &songs)?;
+            let current = wanted
+                .as_ref()
+                .and_then(|id| kept.iter().position(|s| s == id));
+            play_queue::save(c, &editor.user, &kept, current, position_ms, &client)
         })
         .await?;
     Ok(Payload::empty())

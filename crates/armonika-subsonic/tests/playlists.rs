@@ -235,11 +235,24 @@ async fn save_and_get_play_queue_roundtrip() {
         .collect();
     assert_eq!(ids, want(&s, &[0, 1, 2]));
 
-    // A track the caller cannot see is refused and nothing is saved.
-    let v = call(&app, "savePlayQueue", &ann(), "id=t-doesnotexist").await;
-    assert_eq!(v["error"]["code"], 70, "{v}");
+    // A track the caller cannot see is left out and the rest is saved.
+    let v = call(
+        &app,
+        "savePlayQueue",
+        &ann(),
+        &format!("id={}&id=t-doesnotexist&id={}&current={}", s[2], s[0], s[0]),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
     let v = call(&app, "getPlayQueue", &ann(), "").await;
-    assert_eq!(v["playQueue"]["entry"].as_array().unwrap().len(), 3);
+    let ids: Vec<&str> = v["playQueue"]["entry"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, want(&s, &[2, 0]), "{v}");
+    assert_eq!(v["playQueue"]["current"], s[0].as_str(), "{v}");
 
     // Without ids the queue is cleared.
     call(&app, "savePlayQueue", &ann(), "").await;
