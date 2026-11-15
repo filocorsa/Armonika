@@ -43,6 +43,18 @@ Measured on the development machine (Windows 11, release build, 7 formats in rot
 - 1.7 GB on disk (WAV and AIFF templates are about 35 KB each; the rest are small).
 - `manifest.json` has 100,000 entries.
 
+Names are built from a vocabulary of 120,000 pseudo-words (random syllables, with accents
+and CJK words) drawn with Zipf-like frequency, mixed with a few fixed name lists. The
+vocabulary is fixed and does not depend on the seed. Measured on the manifest of 100,000
+tracks (seed 1, titles, artists and albums split on non-alphanumeric characters, lowercase):
+
+- 48,168 distinct words (at least 20,000 required).
+- 91.2% of titles are unique (at least 90% required).
+
+Reproduce with `cargo test --release -p armonika-testdata --test big -- --ignored --nocapture`
+(manifest only, no audio files are written). The default test run only checks a smaller
+library of 20,000 tracks for at least 10,000 distinct words.
+
 ## Messy library (identification test data)
 
 `gen-messy` builds a library of real Creative Commons recordings with deliberately damaged
