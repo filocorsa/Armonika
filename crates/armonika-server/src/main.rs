@@ -22,6 +22,8 @@ struct Cli {
 enum Command {
     /// Run the server.
     Serve,
+    /// Check that the local server is alive (exit code 0 if it is).
+    Healthcheck,
     /// Manage users.
     #[command(subcommand)]
     User(UserCommand),
@@ -54,6 +56,7 @@ fn main() -> anyhow::Result<()> {
             .enable_all()
             .build()?
             .block_on(serve::run(config)),
+        Command::Healthcheck => cli::healthcheck::run(config.server.bind),
         Command::User(command) => {
             let (db, secrets) = cli::open_store(&config)?;
             cli::user::run(&db, &secrets, &config.listenbrainz.url, command)
