@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
             .block_on(serve::run(config)),
         Command::User(command) => {
             let (db, secrets) = cli::open_store(&config)?;
-            cli::user::run(&db, &secrets, command)
+            cli::user::run(&db, &secrets, &config.listenbrainz.url, command)
         }
         Command::Library(command) => {
             let db = cli::open_db(&config)?;

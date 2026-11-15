@@ -155,18 +155,35 @@ pub async fn scrobble(
     let client = params.get("c").unwrap_or("unknown").to_owned();
     let user = access.user.clone();
     let items = tracks.iter().cloned().map(ItemRef::Track).collect();
-    // A submitted play will also go to the scrobbling services once that exists.
-    write_visible(state, access, items, move |c| {
-        for (track, time) in tracks.iter().zip(&times) {
-            if submission {
-                annotations::record_play(c, &user, track, *time)?;
-            } else {
-                play_queue::set_now_playing(c, &user, &client, track)?;
+    // All the plays of the request go in one transaction, together with the outbox
+    // rows of the linked scrobbling services.
+    let sink = state.scrobbles.clone();
+    let (play_user, plays) = (user.clone(), tracks.clone());
+    let response = write_visible(state, access, items, move |c| {
+        if !submission {
+            for track in &plays {
+                play_queue::set_now_playing(c, &play_user, &client, track)?;
             }
+            return Ok(());
         }
+        let tx = c.unchecked_transaction()?;
+        for (track, time) in plays.iter().zip(&times) {
+            annotations::record_play_in(&tx, &play_user, track, *time)?;
+            sink.submitted(&tx, &play_user, track, *time)?;
+        }
+        tx.commit()?;
         Ok(())
     })
-    .await
+    .await?;
+    if !submission {
+        for track in tracks {
+            // Best effort and off the request: a slow service never slows the player.
+            let sink = state.scrobbles.clone();
+            let user = user.clone();
+            tokio::spawn(async move { sink.now_playing(&user, &track).await });
+        }
+    }
+    Ok(response)
 }
 
 pub async fn get_starred(

@@ -12,6 +12,7 @@ use armonika_core::access::{self, Permission};
 use armonika_core::db::{Connection, Db};
 use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, NewUser, User, UserFlagsUpdate};
+use armonika_scrobble::{accounts, listenbrainz::ListenBrainz};
 use clap::{ArgAction, Args, Subcommand};
 
 use crate::cli::library::find as find_library;
@@ -91,6 +92,23 @@ pub enum UserCommand {
     /// Manage API keys.
     #[command(subcommand)]
     ApiKey(ApiKeyCommand),
+    /// Link a ListenBrainz account. The token is read from standard input, checked
+    /// with ListenBrainz and stored encrypted.
+    Listenbrainz {
+        /// Login name.
+        name: String,
+        /// Read the user token from the first line of standard input.
+        #[arg(long, required = true)]
+        token_stdin: bool,
+    },
+    /// Unlink a scrobbling service: deletes the stored token and the plays still
+    /// waiting to be sent to it.
+    ScrobbleUnlink {
+        /// Login name.
+        name: String,
+        /// The service, `listenbrainz`.
+        service: String,
+    },
 }
 
 /// Manage API keys.
@@ -147,7 +165,12 @@ impl PasswordSource {
 }
 
 /// Runs a `user` subcommand on the database `db`.
-pub fn run(db: &Db, sb: &SecretBox, command: UserCommand) -> anyhow::Result<()> {
+pub fn run(
+    db: &Db,
+    sb: &SecretBox,
+    listenbrainz_url: &str,
+    command: UserCommand,
+) -> anyhow::Result<()> {
     match command {
         UserCommand::Create {
             name,
@@ -238,12 +261,52 @@ pub fn run(db: &Db, sb: &SecretBox, command: UserCommand) -> anyhow::Result<()> 
             eprintln!("API key {label:?} for {name}; it will not be shown again:");
             println!("{key}");
         }
+        UserCommand::Listenbrainz { name, token_stdin } => {
+            debug_assert!(token_stdin);
+            let user = db.read_blocking(|c| find(c, &name))?;
+            let token = read_token()?;
+            let checked = ListenBrainz::new(listenbrainz_url).validate_token(&token);
+            let account = match checked {
+                Ok(Some(account)) => account,
+                Ok(None) => bail!("ListenBrainz does not accept this token"),
+                Err(e) => bail!("could not check the token with ListenBrainz: {e}"),
+            };
+            db.write_blocking(|c| {
+                accounts::link(c, sb, &user.id, "listenbrainz", &token, Some(&account))
+            })?;
+            println!("linked {name} to ListenBrainz as {account}");
+        }
+        UserCommand::ScrobbleUnlink { name, service } => {
+            if service != "listenbrainz" {
+                bail!("unknown service {service:?}; the only one is listenbrainz");
+            }
+            let had = db.write_blocking(|c| accounts::unlink(c, &find(c, &name)?.id, &service))?;
+            if had {
+                println!("unlinked {name} from {service}");
+            } else {
+                println!("{name} was not linked to {service}");
+            }
+        }
         UserCommand::ApiKey(ApiKeyCommand::Revoke { name, label }) => {
             db.write_blocking(|c| users::revoke_api_key(c, &find(c, &name)?.id, &label))?;
             println!("revoked API key {label:?} of {name}");
         }
     }
     Ok(())
+}
+
+/// The first line of standard input, without the line ending, as a ListenBrainz token.
+fn read_token() -> anyhow::Result<String> {
+    let mut line = String::new();
+    let read = std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("cannot read the token from standard input")?;
+    let token = line.trim();
+    if read == 0 || token.is_empty() {
+        bail!("no token on standard input");
+    }
+    Ok(token.to_owned())
 }
 
 fn find(conn: &Connection, name: &str) -> armonika_core::Result<User> {

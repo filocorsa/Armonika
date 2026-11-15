@@ -108,10 +108,19 @@ pub fn set_rating(conn: &Connection, user: &UserId, item: &ItemRef, rating: u8) 
 /// Counts a play of `track` by `user` at `at_ms` (Unix milliseconds): the play count
 /// goes up, the last play moves forward (never back) and the play goes in the history.
 pub fn record_play(conn: &Connection, user: &UserId, track: &TrackId, at_ms: i64) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    record_play_in(&tx, user, track, at_ms)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// [`record_play`] without a transaction of its own, for a caller that already has one
+/// open and writes more rows (the scrobble outbox) that must commit with the play.
+/// Called outside a transaction, the two statements are not atomic.
+pub fn record_play_in(conn: &Connection, user: &UserId, track: &TrackId, at_ms: i64) -> Result<()> {
     let user = require_user(conn, user)?;
     let key = resolve_track(conn, track)?.ok_or_else(|| Error::TrackNotFound(track.clone()))?;
-    let tx = conn.unchecked_transaction()?;
-    tx.prepare_cached(
+    conn.prepare_cached(
         "INSERT INTO track_annotations (user_id, track_id, play_count, last_played_at)
          VALUES (?1, ?2, 1, ?3)
          ON CONFLICT (user_id, track_id) DO UPDATE SET
@@ -120,11 +129,10 @@ pub fn record_play(conn: &Connection, user: &UserId, track: &TrackId, at_ms: i64
                                 excluded.last_played_at)",
     )?
     .execute(params![user, key, at_ms])?;
-    tx.prepare_cached(
+    conn.prepare_cached(
         "INSERT INTO play_history (user_id, track_id, played_at) VALUES (?1, ?2, ?3)",
     )?
     .execute(params![user, key, at_ms])?;
-    tx.commit()?;
     Ok(())
 }
 

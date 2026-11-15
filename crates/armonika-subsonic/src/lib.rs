@@ -25,6 +25,7 @@ use axum::http::{HeaderMap, Method, Request, header};
 use axum::response::Response;
 use axum::routing::get;
 
+pub use armonika_scrobble::ScrobbleSink;
 pub use auth::{Caller, authenticate};
 pub use error::ApiError;
 pub use response::{Format, Payload};
@@ -44,10 +45,6 @@ pub struct MediaConfig {
     pub transcode_bitrate_kbps: u32,
     pub cover_cache_dir: PathBuf,
 }
-
-/// Where plays are reported. Does nothing until the scrobbling task replaces it.
-#[derive(Clone, Debug, Default)]
-pub struct ScrobbleSink {}
 
 /// What every handler needs.
 #[derive(Clone)]

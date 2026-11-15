@@ -174,3 +174,95 @@ fn a_changed_secret_key_stops_the_command_and_names_its_source() {
     assert!(err.contains("ARMONIKA_SECRET_KEY"), "{err}");
     assert!(!err.contains(wrong), "{err}");
 }
+
+/// Serves `answers` (status, body) one connection each, on a free local port, and
+/// returns the base URL. Stands in for ListenBrainz.
+fn fake_listenbrainz(answers: Vec<(u16, &'static str)>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for (status, body) in answers {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    url
+}
+
+fn armonika_lb(dir: &Path, url: &str, args: &[&str], stdin: &str) -> (bool, String, String) {
+    let out = assert_cmd::Command::cargo_bin("armonika")
+        .unwrap()
+        .args(args)
+        .env_remove("ARMONIKA_CONFIG")
+        .env_remove("ARMONIKA_SECRET_KEY")
+        .env("ARMONIKA_DATA_DIR", dir.join("data"))
+        .env("ARMONIKA_LISTENBRAINZ__URL", url)
+        .current_dir(dir)
+        .write_stdin(stdin)
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn listenbrainz_link_validates_and_stores_the_token_encrypted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ok, out, err) = armonika(
+        dir.path(),
+        &["user", "create", "alice", "--password-stdin"],
+        "correct horse\n",
+    );
+    assert!(ok, "{out}{err}");
+
+    let url = fake_listenbrainz(vec![
+        (200, r#"{"code":200,"valid":false}"#),
+        (200, r#"{"code":200,"valid":true,"user_name":"alicelb"}"#),
+    ]);
+    let args = ["user", "listenbrainz", "alice", "--token-stdin"];
+    let (ok, _, err) = armonika_lb(dir.path(), &url, &args, "bad-token\n");
+    assert!(!ok && err.contains("does not accept"), "{err}");
+    assert!(!err.contains("bad-token"), "{err}");
+
+    let (ok, out, err) = armonika_lb(dir.path(), &url, &args, "good-token-123\n");
+    assert!(ok, "{out}{err}");
+    assert!(
+        out.contains("alicelb") && !out.contains("good-token-123"),
+        "{out}"
+    );
+
+    let db = std::fs::read(dir.path().join("data").join("armonika.db")).unwrap();
+    let wal = std::fs::read(dir.path().join("data").join("armonika.db-wal")).unwrap_or_default();
+    let needle = b"good-token-123";
+    assert!(
+        !db.windows(needle.len()).any(|w| w == needle)
+            && !wal.windows(needle.len()).any(|w| w == needle),
+        "the token is stored in clear"
+    );
+
+    let (ok, out, err) = armonika(
+        dir.path(),
+        &["user", "scrobble-unlink", "alice", "listenbrainz"],
+        "",
+    );
+    assert!(ok && out.contains("unlinked"), "{out}{err}");
+    let (ok, out, _) = armonika(
+        dir.path(),
+        &["user", "scrobble-unlink", "alice", "listenbrainz"],
+        "",
+    );
+    assert!(ok && out.contains("was not linked"), "{out}");
+}
