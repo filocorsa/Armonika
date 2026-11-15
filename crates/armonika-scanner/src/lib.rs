@@ -113,6 +113,10 @@ pub enum ScanError {
     /// The database failed. The batches committed before stay.
     #[error(transparent)]
     Db(#[from] armonika_core::Error),
+    /// Stopped on request after a batch. What the batches before it wrote stays; the
+    /// files not looked at are found by the next scan.
+    #[error("the scan was cancelled")]
+    Cancelled,
 }
 
 /// Scans the library `library`: blocking, to be called from a dedicated thread.
@@ -125,5 +129,18 @@ pub fn scan_library(
     progress: &dyn Fn(ScanProgress),
     changes: &dyn Fn(LibraryChange),
 ) -> Result<ScanReport, ScanError> {
-    reconcile::scan(db, library, opts, progress, changes)
+    scan_library_until(db, library, opts, progress, changes, &|| false)
+}
+
+/// Like [`scan_library`], and stops with [`ScanError::Cancelled`] when `cancel` returns
+/// true, which is checked before each batch: the batch in progress is written first.
+pub fn scan_library_until(
+    db: &Db,
+    library: LibraryId,
+    opts: ScanOptions,
+    progress: &dyn Fn(ScanProgress),
+    changes: &dyn Fn(LibraryChange),
+    cancel: &dyn Fn() -> bool,
+) -> Result<ScanReport, ScanError> {
+    reconcile::scan(db, library, opts, progress, changes, cancel)
 }

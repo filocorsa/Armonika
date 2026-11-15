@@ -238,3 +238,13 @@ fn hasher_pauses_during_scan() {
             == 1
     });
 }
+
+#[test]
+fn no_scan_starts_after_shutdown() {
+    let env = Env::new();
+    env.add("a.mp3");
+    env.controller.shutdown();
+    env.controller.request(env.id);
+    assert!(!env.controller.status().scanning);
+    assert!(env.controller.status().libraries.is_empty());
+}

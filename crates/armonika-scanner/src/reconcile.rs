@@ -52,6 +52,7 @@ pub(crate) fn scan(
     opts: ScanOptions,
     progress: &dyn Fn(ScanProgress),
     changes: &dyn Fn(LibraryChange),
+    cancel: &dyn Fn() -> bool,
 ) -> Result<ScanReport, ScanError> {
     let started = Instant::now();
     let root = db
@@ -109,6 +110,9 @@ pub(crate) fn scan(
     let total = jobs.len() as u64;
     let mut done = 0;
     for chunk in jobs.chunks(opts.batch.max(1)) {
+        if cancel() {
+            return Err(ScanError::Cancelled);
+        }
         let reads = read_chunk(pool.as_ref(), chunk);
         report.files_read += reads.iter().filter(|r| r.is_some()).count() as u64;
         let mut change = Change::default();

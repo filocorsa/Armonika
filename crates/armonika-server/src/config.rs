@@ -74,7 +74,6 @@ pub struct ScanConfig {
     #[serde(with = "humantime_serde")]
     pub interval: Duration,
     pub threads: usize,
-    pub hash_on_start: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,7 +131,6 @@ impl Default for ScanConfig {
             watch: true,
             interval: Duration::from_secs(3600),
             threads: 4,
-            hash_on_start: true,
         }
     }
 }

@@ -540,3 +540,28 @@ fn symlink_loop_does_not_hang() {
     assert_eq!(report.new, 1);
     assert!(lib.present_at("dir/a.mp3").is_some());
 }
+
+#[test]
+fn cancelled_scan_stops_after_the_current_batch() {
+    let lib = Lib::new();
+    for n in 1..=3 {
+        lib.add(&format!("t{n}.mp3"), &format!("Song {n}"));
+    }
+    let batches = std::cell::Cell::new(0);
+    let result = armonika_scanner::scan_library_until(
+        &lib.db,
+        lib.id,
+        ScanOptions {
+            threads: 1,
+            batch: 1,
+        },
+        &|_| {},
+        &|_| batches.set(batches.get() + 1),
+        &|| batches.get() >= 1,
+    );
+    assert!(matches!(result, Err(ScanError::Cancelled)), "{result:?}");
+    assert_eq!(batches.get(), 1);
+    // What was committed stays; the next scan finishes the job.
+    let report = lib.scan();
+    assert_eq!((report.new, report.unchanged), (2, 1));
+}
