@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -53,6 +54,9 @@ jobs:
             echo "changed: $f"
             case "$f" in
               *.md|docs/*|images/*) ;;
+              # Build inputs: always count as code (also matched by the
+              # catch-all below, listed so the intent is explicit).
+              Cargo.toml|Cargo.lock|*/Cargo.toml) code=true ;;
               *) code=true ;;
             esac
           done < <(git diff --name-only "$base" HEAD)
@@ -122,6 +126,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: python3 scripts/check_text_style.py
