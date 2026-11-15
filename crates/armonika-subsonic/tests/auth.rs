@@ -65,6 +65,19 @@ async fn wrong_password_is_40() {
 }
 
 #[tokio::test]
+async fn unknown_user_is_40_after_the_failure_delay() {
+    let app = app().await;
+    let started = Instant::now();
+    let r = get(
+        &app,
+        &format!("/rest/ping?{}", login("ghost", "whatever-pw")),
+    )
+    .await;
+    assert_eq!(r.json()["error"]["code"], 40);
+    assert!(started.elapsed() >= armonika_subsonic::AUTH_FAILURE_DELAY);
+}
+
+#[tokio::test]
 async fn failed_logins_do_not_serialize() {
     let app = app().await;
     let started = Instant::now();

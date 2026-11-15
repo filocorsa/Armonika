@@ -4,6 +4,8 @@
 //! Token and password are checked against the Subsonic password of the user (the one
 //! the token scheme needs in clear), never against the login password.
 
+use std::sync::OnceLock;
+
 use armonika_core::access::Access;
 use armonika_core::users;
 use md5::{Digest, Md5};
@@ -50,23 +52,31 @@ pub async fn authenticate(state: &AppState, params: &Params) -> Result<Caller, A
         .db
         .read(move |c| {
             let Some(user) = users::by_name(c, &name)? else {
+                // An unknown user pays for a decryption as well, of a value nobody has.
+                let sealed = DUMMY_SEALED.get_or_init(|| secrets.seal(b"no such user"));
+                let _ = secrets.open(sealed);
                 return Ok(None);
             };
             let password = users::subsonic_password(c, &secrets, &user.id)?;
-            Ok(Some((password, Access::load(c, &user.id)?)))
+            Ok(Some((password, user.id)))
         })
         .await?;
     // An unknown user goes through the same comparison, against a password nobody has.
-    let (password, access) = match found {
-        Some((password, access)) => (password, Some(access)),
+    let (password, user) = match found {
+        Some((password, user)) => (password, Some(user)),
         None => ("no such user".to_owned(), None),
     };
     let matches = proof.matches(&password);
-    match access {
-        Some(access) if matches => Ok(Caller(access)),
-        _ => Err(ApiError::wrong_credentials()),
-    }
+    let Some(user) = user.filter(|_| matches) else {
+        return Err(ApiError::wrong_credentials());
+    };
+    // The rights are read only for a proof that matched.
+    let access = state.db.read(move |c| Access::load(c, &user)).await?;
+    Ok(Caller(access))
 }
+
+/// A sealed value that an unknown user's login decrypts, so that it takes the time of one.
+static DUMMY_SEALED: OnceLock<Vec<u8>> = OnceLock::new();
 
 enum Proof {
     Token { token: String, salt: String },
