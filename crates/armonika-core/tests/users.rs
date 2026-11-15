@@ -371,3 +371,37 @@ fn visible_with_foreign_filter_is_empty() {
     })
     .unwrap();
 }
+
+#[test]
+fn unparsable_stored_hash_is_an_error_not_a_wrong_password() {
+    let (_dir, db, sb) = open_temp();
+    db.write_blocking(|c| {
+        users::create(c, &sb, new_user("ann", false))?;
+        c.execute(
+            "UPDATE users SET password_hash = 'not-a-phc-string' WHERE name = 'ann'",
+            [],
+        )?;
+        let err = users::verify_password(c, "ann", "ann-password").unwrap_err();
+        assert!(matches!(err, Error::PasswordHash(_)), "{err:?}");
+        // A user that does not exist is still just "no match".
+        assert_eq!(users::verify_password(c, "ghost", "whatever-pw")?, None);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn unparsable_permission_is_an_error_not_listen() {
+    let (_dir, db, sb) = open_temp();
+    db.write_blocking(|c| {
+        let ann = users::create(c, &sb, new_user("ann", false))?;
+        let lib = insert_library(c, "A");
+        access::grant(c, &ann, lib, Permission::Manage)?;
+        c.execute_batch("PRAGMA ignore_check_constraints = ON")?;
+        c.execute("UPDATE library_access SET permission = 'bogus'", [])?;
+        let err = Access::load(c, &ann).unwrap_err();
+        assert!(matches!(err, Error::InvalidPermission(_)), "{err:?}");
+        Ok(())
+    })
+    .unwrap();
+}

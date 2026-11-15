@@ -434,6 +434,66 @@ fn moved_and_retagged_file_relinked_by_hash() {
     assert_eq!(again.hashed, 0);
 }
 
+/// Scrobble outbox, now-playing rows and artist stars across a relink by hash: the rows
+/// of the absorbed track follow the kept one and what a user starred on an artist is not touched.
+#[test]
+fn relink_moves_outbox_and_now_playing_and_keeps_artist_stars() {
+    let lib = Lib::new();
+    let (old, new) = moved_and_retagged(&lib);
+    personal_data(&lib, &old, &new);
+    lib.db
+        .write_blocking(|c| {
+            let k = resolve_track(c, &old)?.unwrap();
+            let a = resolve_track(c, &new)?.unwrap();
+            c.execute_batch(&format!(
+                "INSERT INTO artists (public_id, name, norm_name, updated_at)
+                 VALUES ('ar-starred', 'Someone', 'someone', 0);
+                 INSERT INTO artist_annotations (user_id, artist_id, starred_at, rating)
+                 SELECT u.id, ar.id, 55, 3 FROM users u, artists ar
+                 WHERE ar.public_id = 'ar-starred';
+                 INSERT INTO scrobble_outbox
+                   (user_id, service, track_id, played_at, next_attempt_at)
+                 SELECT id, 'lastfm', {a}, 9, 0 FROM users;
+                 INSERT INTO scrobble_outbox
+                   (user_id, service, track_id, played_at, next_attempt_at)
+                 SELECT id, 'listenbrainz', {k}, 8, 0 FROM users;
+                 INSERT INTO now_playing (user_id, client, track_id, started_at)
+                 SELECT id, 'player-1', {k}, 1 FROM users;
+                 INSERT INTO now_playing (user_id, client, track_id, started_at)
+                 SELECT id, 'player-2', {a}, 3 FROM users;"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (report, _) = lib.hash();
+    assert_eq!(report.merged, 1);
+
+    let kept = "(SELECT id FROM tracks WHERE title LIKE 'Song (2011%')";
+    assert_eq!(lib.count("SELECT count(*) FROM scrobble_outbox"), 2);
+    assert_eq!(
+        lib.count(&format!(
+            "SELECT count(*) FROM scrobble_outbox WHERE track_id = {kept}"
+        )),
+        2
+    );
+    assert_eq!(lib.count("SELECT count(*) FROM now_playing"), 2);
+    assert_eq!(
+        lib.count(&format!(
+            "SELECT count(*) FROM now_playing WHERE track_id = {kept}"
+        )),
+        2
+    );
+    assert_eq!(
+        lib.count(
+            "SELECT count(*) FROM artist_annotations
+             WHERE starred_at = 55 AND rating = 3
+               AND artist_id = (SELECT id FROM artists WHERE public_id = 'ar-starred')"
+        ),
+        1
+    );
+}
+
 #[test]
 fn merged_track_old_id_still_resolves() {
     let lib = Lib::new();

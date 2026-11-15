@@ -57,6 +57,18 @@ pub enum Error {
     /// Sealed data is truncated, was tampered with or was sealed with another key.
     #[error("sealed data cannot be decrypted (wrong secret key or corrupted data)")]
     Decrypt,
+    /// The secret key is not the one the database was sealed with.
+    #[error(
+        "{from} is not the secret key this database was created with; restore the original key, \
+         or the stored Subsonic passwords cannot be read"
+    )]
+    SecretKeyMismatch {
+        /// Where the key came from.
+        from: String,
+    },
+    /// A stored permission is neither `listen` nor `manage`.
+    #[error("invalid stored permission {0:?}")]
+    InvalidPermission(String),
     /// Hashing a password failed.
     #[error("password hashing failed: {0}")]
     PasswordHash(String),
@@ -90,6 +102,15 @@ pub enum Error {
     /// No library album has this identifier.
     #[error("album not found: {0}")]
     AlbumNotFound(crate::ids::LibraryAlbumId),
+    /// No artist has this identifier.
+    #[error("artist not found: {0}")]
+    ArtistNotFound(crate::ids::ArtistId),
+    /// No playlist has this identifier, or the caller cannot see it.
+    #[error("playlist not found: {0}")]
+    PlaylistNotFound(crate::ids::PlaylistId),
+    /// Only the owner of a playlist may change or delete it.
+    #[error("only the owner can change the playlist {0}")]
+    NotPlaylistOwner(crate::ids::PlaylistId),
     /// No library has this identifier.
     #[error("library not found: {0}")]
     LibraryNotFound(crate::ids::LibraryId),

@@ -12,11 +12,19 @@ workspace = true
 [dependencies]
 armonika-core = { path = "../armonika-core" }
 blake3 = "1.8.7"
+bytes = "1.12.1"
+futures-core = "0.3.34"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 lofty = "0.25.5"
 symphonia = { version = "0.6.1", features = ["all"] }
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["process", "io-util", "rt"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
 armonika-testdata = { path = "../../bench/testdata" }
 lofty = "0.25.5"
 tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"] }
+futures-util = "0.3.34"

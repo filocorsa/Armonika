@@ -124,11 +124,12 @@ impl Access {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter()
                 .map(|(id, p)| {
-                    // The CHECK constraint on the column allows only these two values.
-                    let permission = p.parse().unwrap_or(Permission::Listen);
-                    (LibraryId(id), permission)
+                    // The CHECK constraint on the column allows only two values; if
+                    // one slips in anyway, fail instead of guessing a permission.
+                    let permission = p.parse().map_err(|_| Error::InvalidPermission(p))?;
+                    Ok((LibraryId(id), permission))
                 })
-                .collect()
+                .collect::<Result<Vec<_>>>()?
         };
         Ok(Access {
             user: user.clone(),

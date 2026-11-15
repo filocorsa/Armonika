@@ -123,13 +123,20 @@ pub fn verify_password(conn: &Connection, name: &str, password: &str) -> Result<
     let Some((id, hash)) = row else {
         // Spend the same time as for a real user, so timing does not tell which
         // names exist.
-        let _ = Argon2::default().verify_password(password.as_bytes(), dummy_hash());
+        check_hash(password, dummy_hash()?)?;
         return Ok(None);
     };
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), hash.as_str())
-        .is_ok()
-        .then_some(id))
+    // A stored hash that cannot be parsed is a damaged row, not a wrong password.
+    Ok(check_hash(password, &hash)?.then_some(id))
+}
+
+/// Whether `password` matches the PHC string `hash`; an error if `hash` is unusable.
+fn check_hash(password: &str, hash: &str) -> Result<bool> {
+    match Argon2::default().verify_password(password.as_bytes(), hash) {
+        Ok(()) => Ok(true),
+        Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
+        Err(e) => Err(Error::PasswordHash(e.to_string())),
+    }
 }
 
 /// The Subsonic password of `user`, in clear.
@@ -354,15 +361,29 @@ fn hash_password(password: &str) -> Result<String> {
 }
 
 /// A valid hash of a random password, verified against when the user does not exist.
-fn dummy_hash() -> &'static str {
-    static HASH: OnceLock<String> = OnceLock::new();
+fn dummy_hash() -> Result<&'static str> {
+    static HASH: OnceLock<std::result::Result<String, String>> = OnceLock::new();
     HASH.get_or_init(|| {
         let mut bytes = [0; 16];
-        let _ = random_bytes(&mut bytes);
-        hash_password(&URL_SAFE_NO_PAD.encode(bytes)).unwrap_or_default()
+        random_bytes(&mut bytes).map_err(|e| e.to_string())?;
+        hash_password(&URL_SAFE_NO_PAD.encode(bytes)).map_err(|e| e.to_string())
     })
+    .as_deref()
+    .map_err(|e| Error::PasswordHash(e.clone()))
 }
 
 fn api_key_hash(api_key: &str) -> String {
     blake3::hash(api_key.as_bytes()).to_hex().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dummy_hash_is_a_real_hash_that_costs_a_full_verification() {
+        let hash = dummy_hash().unwrap();
+        assert!(argon2::password_hash::phc::PasswordHash::new(hash).is_ok());
+        assert!(!check_hash("not the random password", hash).unwrap());
+    }
 }

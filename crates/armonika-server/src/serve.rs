@@ -18,17 +18,47 @@ use armonika_core::users::{self, BootstrapOutcome};
 use armonika_scanner::controller::ScanController;
 use armonika_scanner::{ScanOptions, watch};
 use armonika_search::{SearchIndex, TantivyIndex, updater};
+use armonika_subsonic::{AppState, MediaConfig, ScrobbleSink};
 
 use crate::config::Config;
 
-fn router(config: &Config) -> Router {
+fn router(config: &Config, state: AppState) -> Router {
+    let api = armonika_subsonic::router(state);
     if config.web.enabled {
-        Router::new().route(
+        api.route(
             "/",
             get(|| async { format!("Armonika {}", armonika_core::VERSION) }),
         )
     } else {
-        Router::new()
+        api
+    }
+}
+
+fn app_state(
+    config: &Config,
+    db: &Db,
+    secrets: SecretBox,
+    search: Arc<dyn SearchIndex>,
+    scans: ScanController,
+) -> AppState {
+    AppState {
+        db: db.clone(),
+        secrets: Arc::new(secrets),
+        search,
+        scans,
+        media: MediaConfig {
+            ffmpeg: config.ffmpeg_path.clone(),
+            transcode_format: config.transcode.format.clone(),
+            transcode_bitrate_kbps: config.transcode.bitrate_kbps,
+            cover_cache_dir: config.data_dir.join("covers"),
+        },
+        scrobbles: ScrobbleSink::default(),
+        ignored_articles: config
+            .search
+            .ignored_articles
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
     }
 }
 
@@ -39,12 +69,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (db, secrets) = crate::cli::open_store(&config)?;
     bootstrap_admin(&db, &secrets).await?;
     sync_libraries(&db, &config).await?;
-    let (controller, watcher, search_updater) = start_scanning(&db, &config).await?;
+    let (controller, watcher, search_updater, search) = start_scanning(&db, &config).await?;
+    let state = app_state(&config, &db, secrets, search, controller.clone());
     let listener = tokio::net::TcpListener::bind(config.server.bind)
         .await
         .with_context(|| format!("cannot bind {}", config.server.bind))?;
     tracing::info!(bind = %config.server.bind, "armonika listening");
-    axum::serve(listener, router(&config))
+    axum::serve(listener, router(&config, state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")?;
@@ -77,6 +108,7 @@ async fn start_scanning(
     ScanController,
     watch::WatchHandle,
     tokio::task::JoinHandle<()>,
+    Arc<dyn SearchIndex>,
 )> {
     let (changes, rx) = tokio::sync::mpsc::unbounded_channel();
     let search_dir = config.data_dir.join("search");
@@ -87,7 +119,9 @@ async fn start_scanning(
     let created = index.was_created();
     let index: Arc<dyn SearchIndex> = Arc::new(index);
     let search_db = db.clone();
+    let updater_index = index.clone();
     let search_updater = tokio::spawn(async move {
+        let index = updater_index;
         if let Err(e) = updater::rebuild_if_needed(search_db.clone(), index.clone(), created).await
         {
             tracing::error!(error = %e, "cannot rebuild the search index");
@@ -112,7 +146,7 @@ async fn start_scanning(
     let watcher = watch::spawn(controller.clone(), watched, config.scan.interval);
     let first = controller.clone();
     tokio::task::spawn_blocking(move || first.request_all());
-    Ok((controller, watcher, search_updater))
+    Ok((controller, watcher, search_updater, index))
 }
 
 /// Creates the first admin from `ARMONIKA_ADMIN_USER` and `ARMONIKA_ADMIN_PASSWORD`

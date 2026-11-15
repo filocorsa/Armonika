@@ -87,6 +87,16 @@ fn setup(dir: &Path) {
                 [key],
             )?;
         }
+        // The saved queue holds `present` and `old`.
+        c.execute(
+            "INSERT INTO play_queues (user_id, changed_at, changed_by) VALUES (?1, 0, 'test')",
+            [user],
+        )?;
+        c.execute(
+            "INSERT INTO play_queue_entries (user_id, position, track_id)
+             VALUES (?1, 0, 1), (?1, 1, 2)",
+            [user],
+        )?;
         Ok(())
     })
     .unwrap();
@@ -123,6 +133,8 @@ fn purge_missing_requires_yes() {
             && out.contains("2 annotations")
             && out.contains("2 history entries")
             && out.contains("1 playlists")
+            && out.contains("2 playlist entries")
+            && out.contains("1 play queue entries")
             && out.contains("--yes"),
         "{out}"
     );
