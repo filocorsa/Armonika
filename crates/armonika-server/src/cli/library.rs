@@ -96,7 +96,9 @@ pub fn run(db: &Db, config: &Config, command: LibraryCommand) -> anyhow::Result<
             let report = scan_library(db, id, opts, &|_| {}, &|_| {})?;
             if report.empty_root_guard {
                 anyhow::bail!(
-                    "library {name} has tracks but its root has no audio files: nothing was                      changed. Check that the volume is mounted; if the library was emptied on                      purpose, run again with --allow-empty"
+                    "library {name} has tracks but its root has no audio files: nothing was \
+                     changed. Check that the volume is mounted; if the library was emptied on \
+                     purpose, run again with --allow-empty"
                 );
             }
             println!(
@@ -104,7 +106,8 @@ pub fn run(db: &Db, config: &Config, command: LibraryCommand) -> anyhow::Result<
                 report.seen, report.new, report.changed, report.missing
             );
             println!(
-                "note: the search index is updated by the running server only: restart it                  if search results look out of date"
+                "note: the search index is updated by the running server only: restart it \
+                 if search results look out of date"
             );
         }
         LibraryCommand::Remove { name, yes } => {
