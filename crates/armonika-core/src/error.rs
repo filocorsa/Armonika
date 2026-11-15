@@ -105,6 +105,12 @@ pub enum Error {
     /// No artist has this identifier.
     #[error("artist not found: {0}")]
     ArtistNotFound(crate::ids::ArtistId),
+    /// No playlist has this identifier, or the caller cannot see it.
+    #[error("playlist not found: {0}")]
+    PlaylistNotFound(crate::ids::PlaylistId),
+    /// Only the owner of a playlist may change or delete it.
+    #[error("only the owner can change the playlist {0}")]
+    NotPlaylistOwner(crate::ids::PlaylistId),
     /// No library has this identifier.
     #[error("library not found: {0}")]
     LibraryNotFound(crate::ids::LibraryId),

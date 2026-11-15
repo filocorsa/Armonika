@@ -68,6 +68,13 @@ impl ApiError {
 
 impl From<armonika_core::Error> for ApiError {
     fn from(e: armonika_core::Error) -> ApiError {
+        match e {
+            armonika_core::Error::PlaylistNotFound(_) | armonika_core::Error::TrackNotFound(_) => {
+                return ApiError::not_found();
+            }
+            armonika_core::Error::NotPlaylistOwner(_) => return ApiError::unauthorized(),
+            _ => {}
+        }
         // Details stay in the log: they can name paths and tables.
         tracing::error!(error = %e, "request failed");
         ApiError::generic("internal error")

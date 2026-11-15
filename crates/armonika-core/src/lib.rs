@@ -11,6 +11,7 @@ pub mod libraries;
 pub mod model;
 pub mod paths;
 pub mod play_queue;
+pub mod playlists;
 pub mod search_source;
 pub mod secret;
 pub mod text;

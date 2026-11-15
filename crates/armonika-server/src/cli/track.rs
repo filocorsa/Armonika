@@ -46,6 +46,10 @@ pub struct PurgeSummary {
     /// Playlists that lose at least one entry.
     pub playlists: u64,
     pub history: u64,
+    /// Entries removed from playlists.
+    pub playlist_entries: u64,
+    /// Entries removed from saved play queues.
+    pub queue_entries: u64,
 }
 
 pub fn run(db: &Db, command: TrackCommand) -> anyhow::Result<()> {
@@ -63,8 +67,13 @@ pub fn run(db: &Db, command: TrackCommand) -> anyhow::Result<()> {
                 })?;
                 println!(
                     "purged library {library}: {} missing tracks deleted, with {} annotations, \
-                     {} history entries and entries in {} playlists; no file was touched",
-                    s.tracks, s.annotations, s.history, s.playlists
+                     {} history entries, {} playlist entries (in {} playlists) and {} play queue entries; no file was touched",
+                    s.tracks,
+                    s.annotations,
+                    s.history,
+                    s.playlist_entries,
+                    s.playlists,
+                    s.queue_entries
                 );
             } else {
                 let s = db.read_blocking(|c| {
@@ -73,8 +82,13 @@ pub fn run(db: &Db, command: TrackCommand) -> anyhow::Result<()> {
                 })?;
                 println!(
                     "purging the missing tracks of library {library} would delete {} tracks, \
-                     {} annotations, {} history entries and entries in {} playlists",
-                    s.tracks, s.annotations, s.history, s.playlists
+                     {} annotations, {} history entries, {} playlist entries (in {} playlists) and {} play queue entries",
+                    s.tracks,
+                    s.annotations,
+                    s.history,
+                    s.playlist_entries,
+                    s.playlists,
+                    s.queue_entries
                 );
                 println!("nothing done: run again with --yes to delete them");
             }
@@ -113,6 +127,12 @@ fn summary(
         ))?,
         history: count(format!(
             "SELECT COUNT(*) FROM play_history WHERE track_id IN ({SELECTED})"
+        ))?,
+        playlist_entries: count(format!(
+            "SELECT COUNT(*) FROM playlist_entries WHERE track_id IN ({SELECTED})"
+        ))?,
+        queue_entries: count(format!(
+            "SELECT COUNT(*) FROM play_queue_entries WHERE track_id IN ({SELECTED})"
         ))?,
     })
 }

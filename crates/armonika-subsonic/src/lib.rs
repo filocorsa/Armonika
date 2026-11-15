@@ -5,6 +5,7 @@ mod auth;
 mod browse;
 mod error;
 mod media;
+mod playlists;
 mod response;
 mod search;
 mod system;
@@ -224,6 +225,13 @@ async fn dispatch_payload(
         "getStarred2" => annotate::get_starred(state, access, "starred2").await,
         "getStarred" => annotate::get_starred(state, access, "starred").await,
         "getNowPlaying" => annotate::get_now_playing(state, access).await,
+        "getPlaylists" => playlists::get_playlists(state, access).await,
+        "getPlaylist" => playlists::get_playlist(state, access, params).await,
+        "createPlaylist" => playlists::create_playlist(state, access, params).await,
+        "updatePlaylist" => playlists::update_playlist(state, access, params).await,
+        "deletePlaylist" => playlists::delete_playlist(state, access, params).await,
+        "savePlayQueue" => playlists::save_play_queue(state, access, params).await,
+        "getPlayQueue" => playlists::get_play_queue(state, access).await,
         "getArtistInfo2" => browse::get_artist_info2(params),
         "getAlbumInfo2" => browse::get_album_info2(params),
         "getTopSongs" => Ok(browse::get_top_songs()),

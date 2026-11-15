@@ -94,18 +94,22 @@ fn list_size(params: &Params, name: &str) -> Result<usize, ApiError> {
 
 // ------------------------------------------------------------------ JSON
 
-fn insert(map: &mut Map<String, Value>, key: &str, value: impl Into<Value>) {
+pub(crate) fn insert(map: &mut Map<String, Value>, key: &str, value: impl Into<Value>) {
     map.insert(key.to_owned(), value.into());
 }
 
-fn insert_opt<V: Into<Value>>(map: &mut Map<String, Value>, key: &str, value: Option<V>) {
+pub(crate) fn insert_opt<V: Into<Value>>(
+    map: &mut Map<String, Value>,
+    key: &str,
+    value: Option<V>,
+) {
     if let Some(value) = value {
         map.insert(key.to_owned(), value.into());
     }
 }
 
 /// `2023-11-14T22:13:20.000Z` for Unix milliseconds.
-fn iso8601(ms: i64) -> String {
+pub(crate) fn iso8601(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let in_day = ms.rem_euclid(86_400_000);
     // Days since 1970-01-01 to a calendar date (Howard Hinnant's civil_from_days).
@@ -127,7 +131,7 @@ fn iso8601(ms: i64) -> String {
     )
 }
 
-fn seconds(ms: u64) -> u64 {
+pub(crate) fn seconds(ms: u64) -> u64 {
     (ms + 500) / 1000
 }
 
