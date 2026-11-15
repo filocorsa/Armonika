@@ -17,8 +17,10 @@ use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, BootstrapOutcome};
 use armonika_scanner::controller::ScanController;
 use armonika_scanner::{ScanOptions, watch};
+use armonika_scrobble::listenbrainz::ListenBrainz;
+use armonika_scrobble::{ScrobbleService, ScrobbleSink, outbox};
 use armonika_search::{SearchIndex, TantivyIndex, updater};
-use armonika_subsonic::{AppState, MediaConfig, ScrobbleSink};
+use armonika_subsonic::{AppState, MediaConfig};
 
 use crate::config::Config;
 
@@ -40,6 +42,7 @@ fn app_state(
     secrets: SecretBox,
     search: Arc<dyn SearchIndex>,
     scans: ScanController,
+    scrobbles: ScrobbleSink,
 ) -> AppState {
     AppState {
         db: db.clone(),
@@ -52,7 +55,7 @@ fn app_state(
             transcode_bitrate_kbps: config.transcode.bitrate_kbps,
             cover_cache_dir: config.data_dir.join("covers"),
         },
-        scrobbles: ScrobbleSink::default(),
+        scrobbles,
         ignored_articles: config
             .search
             .ignored_articles
@@ -62,6 +65,9 @@ fn app_state(
     }
 }
 
+/// How long shutdown waits for the scrobble outbox pass in progress.
+const OUTBOX_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// How long shutdown waits for the search index updater to apply its last changes.
 const SEARCH_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -70,7 +76,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     bootstrap_admin(&db, &secrets).await?;
     sync_libraries(&db, &config).await?;
     let (controller, watcher, search_updater, search) = start_scanning(&db, &config).await?;
-    let state = app_state(&config, &db, secrets, search, controller.clone());
+    let services: Vec<Arc<dyn ScrobbleService>> =
+        vec![Arc::new(ListenBrainz::new(&config.listenbrainz.url))];
+    let sink = ScrobbleSink::new(db.clone(), secrets.clone(), services.clone());
+    let (stop_outbox, stop_rx) = tokio::sync::watch::channel(false);
+    let outbox_task = tokio::spawn(outbox::run(db.clone(), secrets.clone(), services, stop_rx));
+    let state = app_state(&config, &db, secrets, search, controller.clone(), sink);
     let listener = tokio::net::TcpListener::bind(config.server.bind)
         .await
         .with_context(|| format!("cannot bind {}", config.server.bind))?;
@@ -80,6 +91,15 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .await
         .context("server error")?;
     drop(watcher);
+    let _ = stop_outbox.send(true);
+    if tokio::time::timeout(OUTBOX_STOP_TIMEOUT, outbox_task)
+        .await
+        .is_err()
+    {
+        // Rows are only deleted after the service took them: what is cut short is
+        // sent again at the next start.
+        tracing::warn!("the scrobble outbox did not stop in time");
+    }
     controller.shutdown();
     // The scan controller holds the senders of the change channel: once it is gone the
     // updater applies what is pending and ends. Changes it could not apply in time

@@ -13,6 +13,7 @@ workspace = true
 armonika-core = { path = "../armonika-core" }
 armonika-media = { path = "../armonika-media" }
 armonika-scanner = { path = "../armonika-scanner" }
+armonika-scrobble = { path = "../armonika-scrobble" }
 armonika-search = { path = "../armonika-search" }
 axum = "0.8.9"
 form_urlencoded = "1.2.2"

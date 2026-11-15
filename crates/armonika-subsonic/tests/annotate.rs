@@ -404,3 +404,43 @@ async fn star_invisible_track_is_70() {
     assert_eq!(count(&app, "SELECT count(*) FROM play_history").await, 0);
     assert_eq!(count(&app, "SELECT count(*) FROM now_playing").await, 0);
 }
+
+#[tokio::test]
+async fn scrobble_queues_outbox_rows_with_the_plays_for_linked_services() {
+    let (app, ids) = app_with_song().await;
+    let extra = format!(
+        "id={0}&id={0}&time=1700000000000&time=1700000005000",
+        ids.track
+    );
+
+    // No linked service: the plays count and nothing is queued.
+    let v = call(&app, "scrobble", &ann(), &extra).await;
+    assert_eq!(v["status"], "ok", "{v}");
+    assert_eq!(count(&app, "SELECT count(*) FROM play_history").await, 2);
+    assert_eq!(count(&app, "SELECT count(*) FROM scrobble_outbox").await, 0);
+
+    app.exec(
+        "INSERT INTO scrobble_accounts (user_id, service, secret)
+         SELECT id, 'listenbrainz', x'00' FROM users WHERE name = 'ann'",
+    )
+    .await;
+    let v = call(&app, "scrobble", &ann(), &extra).await;
+    assert_eq!(v["status"], "ok", "{v}");
+    assert_eq!(count(&app, "SELECT count(*) FROM play_history").await, 4);
+    assert_eq!(count(&app, "SELECT count(*) FROM scrobble_outbox").await, 2);
+    assert_eq!(
+        count(&app, "SELECT min(played_at) FROM scrobble_outbox").await,
+        1_700_000_000_000
+    );
+
+    // Now playing is not a play: nothing is queued.
+    let v = call(
+        &app,
+        "scrobble",
+        &ann(),
+        &format!("id={}&submission=false", ids.track),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
+    assert_eq!(count(&app, "SELECT count(*) FROM scrobble_outbox").await, 2);
+}

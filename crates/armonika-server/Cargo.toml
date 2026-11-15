@@ -14,6 +14,7 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 armonika-core = { path = "../armonika-core" }
 armonika-scanner = { path = "../armonika-scanner" }
+armonika-scrobble = { path = "../armonika-scrobble" }
 armonika-search = { path = "../armonika-search" }
 armonika-subsonic = { path = "../armonika-subsonic" }
 axum = "0.8.9"
