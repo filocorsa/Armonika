@@ -56,6 +56,18 @@ The design describes an `inbox` folder for each library, where files copied in w
 | `ARMONIKA_SECRET_KEY` | The key (32 bytes, base64) that encrypts the secrets the server must read back, such as app passwords and ListenBrainz tokens. Without it a key file `secret.key` is created in `data_dir`. Keep it private and do not lose it: secrets stored with another key cannot be read. |
 | `RUST_LOG` | Log level, for example `debug` or `armonika_scanner=debug`. Default `info`. |
 
+## Empty library folders
+
+If the folder of a library exists but holds no audio files while the library has tracks, Armonika assumes the volume is not mounted (with Docker, an unmounted bind mount looks like an empty folder). It marks nothing as missing and logs a warning that names the library. Folders that do not exist or cannot be read stop the scan with an error, as before. Deleting some files, or all but one, still marks them missing as usual.
+
+If you emptied a library on purpose, run the scan by hand with the override:
+
+```
+armonika library scan <name> --allow-empty
+```
+
+The tracks then become missing, and `armonika track purge-missing` can delete them. The watcher and the periodic scan never use the override. `armonika library scan <name>` without the option scans a library once and refuses an empty folder in the same way. The search index is updated by the running server only, so restart it after a manual scan if search results look out of date.
+
 ## Docker
 
 The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data` and `ARMONIKA_SERVER__BIND=0.0.0.0:4747`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` and exits with 0 when the server answers.

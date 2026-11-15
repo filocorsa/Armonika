@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use armonika_core::db::{Connection, Db};
 use armonika_core::libraries::{self, Library};
+use armonika_scanner::{ScanOptions, scan_library};
 use clap::Subcommand;
 
 use crate::config::Config;
@@ -37,6 +38,16 @@ pub enum LibraryCommand {
         name: String,
         /// New root directory.
         path: PathBuf,
+    },
+    /// Scan a library now, without a running server. A root with no audio files is
+    /// refused when the library has tracks (it is most likely an unmounted volume).
+    Scan {
+        /// Name of the library.
+        name: String,
+        /// Accept an empty root as the real state of the library: its present tracks
+        /// become missing.
+        #[arg(long)]
+        allow_empty: bool,
     },
     /// Remove a library and its tracks from the database. Files on disk are not touched.
     /// Without --yes, only print what would be removed.
@@ -74,6 +85,27 @@ pub fn run(db: &Db, config: &Config, command: LibraryCommand) -> anyhow::Result<
                 Ok(find(c, &name)?.root)
             })?;
             println!("library {name} is now at {}", root.display());
+        }
+        LibraryCommand::Scan { name, allow_empty } => {
+            let id = db.read_blocking(|c| find(c, &name))?.id;
+            let opts = ScanOptions {
+                threads: config.scan.threads.max(1),
+                allow_empty,
+                ..ScanOptions::default()
+            };
+            let report = scan_library(db, id, opts, &|_| {}, &|_| {})?;
+            if report.empty_root_guard {
+                anyhow::bail!(
+                    "library {name} has tracks but its root has no audio files: nothing was                      changed. Check that the volume is mounted; if the library was emptied on                      purpose, run again with --allow-empty"
+                );
+            }
+            println!(
+                "scanned library {name}: {} files seen, {} new, {} changed, {} missing",
+                report.seen, report.new, report.changed, report.missing
+            );
+            println!(
+                "note: the search index is updated by the running server only: restart it                  if search results look out of date"
+            );
         }
         LibraryCommand::Remove { name, yes } => {
             if yes {

@@ -62,7 +62,11 @@ impl Lib {
         scan_library(
             &self.db,
             self.id,
-            ScanOptions { threads: 2, batch },
+            ScanOptions {
+                threads: 2,
+                batch,
+                allow_empty: false,
+            },
             &|_| {},
             &|c| events.borrow_mut().push(c),
         )

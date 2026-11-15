@@ -79,6 +79,24 @@ pub(crate) fn scan(
     // Step 2.
     let walked = walk::walk(&root, progress).map_err(unavailable)?;
 
+    // A root that exists but shows nothing, for a library that has tracks, is most
+    // likely an unmounted volume: leave everything as it is.
+    if walked.files.is_empty() && walked.skipped == 0 && !present.is_empty() && !opts.allow_empty {
+        tracing::warn!(
+            library = %library,
+            root = %root.display(),
+            present_tracks = present.len(),
+            "library root has no audio files but the library has tracks: nothing marked \
+             missing; check that the volume is mounted, or run `armonika library scan \
+             <name> --allow-empty` if the library was emptied on purpose"
+        );
+        return Ok(ScanReport {
+            empty_root_guard: true,
+            duration: started.elapsed(),
+            ..ScanReport::default()
+        });
+    }
+
     let mut report = ScanReport {
         seen: walked.files.len() as u64 + walked.skipped,
         unreadable: walked.skipped,

@@ -344,3 +344,20 @@ fn assert_single_spaced(log: &str, start: &str) {
         "two consecutive spaces in {message:?}"
     );
 }
+
+#[test]
+fn library_scan_refuses_an_empty_root_unless_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = mkdir(dir.path(), "music");
+    let (ok, out, err) = armonika(dir.path(), &["library", "add", "Main", &music], "");
+    assert!(ok, "{out}{err}");
+
+    // No tracks yet: an empty root is normal.
+    let (ok, out, err) = armonika(dir.path(), &["library", "scan", "Main"], "");
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("0 files seen"), "{out}");
+
+    let (ok, _, err) = armonika(dir.path(), &["library", "scan", "Nope"], "");
+    assert!(!ok);
+    assert!(err.contains("Nope"), "{err}");
+}

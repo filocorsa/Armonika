@@ -31,6 +31,10 @@ pub struct ScanOptions {
     /// Files written per database transaction; a [`LibraryChange`] follows each one
     /// (at least 1).
     pub batch: usize,
+    /// Accept a root with no audio files as the real state of the library, so its
+    /// present tracks become missing. Off by default: an empty root is more often a
+    /// failed mount than an emptied library. Only the manual scan command sets it.
+    pub allow_empty: bool,
 }
 
 impl Default for ScanOptions {
@@ -38,6 +42,7 @@ impl Default for ScanOptions {
         ScanOptions {
             threads: std::thread::available_parallelism().map_or(4, |n| n.get().min(8)),
             batch: 500,
+            allow_empty: false,
         }
     }
 }
@@ -75,6 +80,9 @@ pub struct ScanReport {
     pub unreadable: u64,
     /// Calls to `read_file`: 0 on a scan of an unchanged library.
     pub files_read: u64,
+    /// The root has no audio files but the library has present tracks, and the scan
+    /// was not told to accept that: nothing was marked missing.
+    pub empty_root_guard: bool,
     /// How long the scan took.
     pub duration: Duration,
 }

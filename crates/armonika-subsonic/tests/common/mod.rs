@@ -163,6 +163,7 @@ impl App {
                 armonika_scanner::ScanOptions {
                     threads: 2,
                     batch: 500,
+                    allow_empty: false,
                 },
                 &|_| {},
                 &|_| {},

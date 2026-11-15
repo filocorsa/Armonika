@@ -36,6 +36,7 @@ impl Env {
         let opts = ScanOptions {
             threads: 2,
             batch: 500,
+            allow_empty: false,
         };
         let controller = ScanController::new(db.clone(), opts, tx);
         Env {
