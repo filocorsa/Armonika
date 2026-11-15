@@ -17,6 +17,7 @@ use bytes::Bytes;
 use futures_core::Stream;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+use tokio::task::JoinHandle;
 use tokio_util::io::ReaderStream;
 
 /// Lowest bit rate passed to ffmpeg, in kbit/s.
@@ -158,7 +159,7 @@ enum State {
 pub struct TranscodeStream {
     // Held so that dropping the stream kills the process (`kill_on_drop`).
     child: Option<Child>,
-    stderr: Option<ChildStderr>,
+    stderr: Option<JoinHandle<Vec<u8>>>,
     output: ReaderStream<ChildStdout>,
     prefetched: Option<Bytes>,
     state: State,
@@ -185,16 +186,34 @@ impl TranscodeStream {
     }
 }
 
-async fn finish(mut child: Child, stderr: Option<ChildStderr>) -> io::Result<()> {
-    let mut tail = Vec::new();
-    if let Some(stderr) = stderr {
-        // Bounded: more than this is not read, and the writer gets a broken pipe.
-        let _ = stderr
-            .take(STDERR_TAIL_BYTES as u64)
-            .read_to_end(&mut tail)
-            .await;
-    }
+/// Reads `stderr` to its end so that ffmpeg never blocks on a full pipe, and keeps only
+/// the last [`STDERR_TAIL_BYTES`] bytes.
+fn drain_stderr(mut stderr: ChildStderr) -> JoinHandle<Vec<u8>> {
+    tokio::spawn(async move {
+        let mut tail: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stderr.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    tail.extend_from_slice(&chunk[..n]);
+                    if tail.len() > STDERR_TAIL_BYTES {
+                        let excess = tail.len() - STDERR_TAIL_BYTES;
+                        tail.drain(..excess);
+                    }
+                }
+            }
+        }
+        tail
+    })
+}
+
+async fn finish(mut child: Child, stderr: Option<JoinHandle<Vec<u8>>>) -> io::Result<()> {
     let status = child.wait().await?;
+    let tail = match stderr {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
     if status.success() {
         return Ok(());
     }
@@ -274,7 +293,7 @@ pub fn spawn(
         .take()
         .ok_or_else(|| io::Error::other("ffmpeg has no output"))?;
     Ok(TranscodeStream {
-        stderr: child.stderr.take(),
+        stderr: child.stderr.take().map(drain_stderr),
         child: Some(child),
         output: ReaderStream::new(stdout),
         prefetched: None,

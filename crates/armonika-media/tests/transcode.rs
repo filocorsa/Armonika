@@ -294,3 +294,26 @@ async fn failure_after_some_audio_is_an_error_not_a_clean_end() {
     }
     assert!(saw_error);
 }
+
+#[tokio::test]
+async fn heavy_error_output_does_not_block_the_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = "e".repeat(200);
+    // More than 1 MiB of error output before any audio.
+    let fake = fake_ffmpeg(
+        dir.path(),
+        &format!("i=0\nwhile [ $i -lt 6000 ]; do echo {line} >&2; i=$((i+1)); done\necho audio"),
+        &format!("for /L %%i in (1,1,6000) do @echo {line} 1>&2\r\necho audio"),
+    );
+    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        stream.prime().await.unwrap();
+        let mut total = 0;
+        while let Some(item) = stream.next().await {
+            total += item.unwrap().len();
+        }
+        assert!(total >= 5, "the audio was delivered");
+    })
+    .await
+    .expect("the stream must not hang on a full error pipe");
+}
