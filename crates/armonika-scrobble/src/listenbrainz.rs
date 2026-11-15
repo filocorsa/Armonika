@@ -90,7 +90,8 @@ impl ListenBrainz {
 fn classify(status: u16) -> SubmitError {
     match status {
         401 | 403 => SubmitError::Auth,
-        429 | 500..=599 => SubmitError::Retry,
+        // 404 and 408 usually mean a wrong URL or a slow proxy: keep the data.
+        404 | 408 | 429 | 500..=599 => SubmitError::Retry,
         _ => SubmitError::Rejected,
     }
 }

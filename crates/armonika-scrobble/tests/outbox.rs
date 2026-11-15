@@ -219,3 +219,92 @@ async fn now_playing_is_sent_once_without_retry() {
     assert_eq!(body["listen_type"], "playing_now");
     assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 0);
 }
+
+/// Answers 400 to any request whose payload holds a track named "Bad", 200 otherwise.
+struct RejectsBad;
+
+impl wiremock::Respond for RejectsBad {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let bad = body["payload"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["track_metadata"]["track_name"] == "Bad");
+        ResponseTemplate::new(if bad { 400 } else { 200 })
+    }
+}
+
+#[tokio::test]
+async fn outbox_rejected_batch_drops_only_the_bad_listen() {
+    let f = setup();
+    f.link("tok");
+    f.enqueue(7, NOW - 1_000_000);
+    // The play with the third time stamp is the bad one: give its track a bad title.
+    f.db.write_blocking(|c| {
+        c.execute_batch(
+            "INSERT INTO tracks (public_id, library_id, state, rel_path, size, mtime_ms, tag_schema,
+               format, title, artist_credit, added_at, updated_at)
+             SELECT 'bad', library_id, state, 'bad.flac', size, mtime_ms, tag_schema, format,
+               'Bad', 'Artist', added_at, updated_at FROM tracks LIMIT 1;",
+        )?;
+        let bad: i64 = c.query_row("SELECT id FROM tracks WHERE public_id = 'bad'", [], |r| {
+            r.get(0)
+        })?;
+        c.execute(
+            "UPDATE scrobble_outbox SET track_id = ?1 WHERE played_at = ?2",
+            [bad, NOW - 1_000_000 + 2],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(RejectsBad)
+        .mount(&server)
+        .await;
+    let mut worker = f.worker(&server.uri());
+    worker.process_due(NOW).await.unwrap();
+    assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 0);
+    // Delivered: every good listen, in some request that was accepted.
+    let mut delivered = 0;
+    for r in server.received_requests().await.unwrap() {
+        let b: Value = serde_json::from_slice(&r.body).unwrap();
+        let items = b["payload"].as_array().unwrap();
+        if items
+            .iter()
+            .all(|l| l["track_metadata"]["track_name"] != "Bad")
+        {
+            delivered += items.len();
+        }
+    }
+    assert_eq!(delivered, 6);
+}
+
+#[tokio::test]
+async fn outbox_rejected_singleton_is_dropped() {
+    let f = setup();
+    f.link("tok");
+    f.enqueue(1, NOW - 1000);
+    let server = server_with(400).await;
+    let mut worker = f.worker(&server.uri());
+    worker.process_due(NOW).await.unwrap();
+    assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 0);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn outbox_404_keeps_rows_and_schedules_a_retry() {
+    let f = setup();
+    f.link("tok");
+    f.enqueue(2, NOW - 1000);
+    let server = server_with(404).await;
+    let mut worker = f.worker(&server.uri());
+    worker.process_due(NOW).await.unwrap();
+    assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 2);
+    assert_eq!(f.count("SELECT min(attempts) FROM scrobble_outbox"), 1);
+    assert_eq!(
+        f.count("SELECT min(next_attempt_at) FROM scrobble_outbox"),
+        NOW + 60_000
+    );
+}

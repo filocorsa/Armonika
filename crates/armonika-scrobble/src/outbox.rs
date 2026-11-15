@@ -148,8 +148,11 @@ impl Worker {
         let Some(token) = token else {
             return Ok(());
         };
-        let mut chunks = sendable.chunks(svc.max_batch().max(1));
-        while let Some(chunk) = chunks.next() {
+        // A refused batch is split in halves until the refused play is alone: one bad
+        // listen must not take the good ones with it.
+        let mut pending: std::collections::VecDeque<&[(Row, Listen)]> =
+            sendable.chunks(svc.max_batch().max(1)).collect();
+        while let Some(chunk) = pending.pop_front() {
             let batch: Vec<Listen> = chunk.iter().map(|(_, l)| l.clone()).collect();
             let (svc, token) = (svc.clone(), token.clone());
             let outcome = tokio::task::spawn_blocking(move || svc.submit(&token, &batch))
@@ -161,12 +164,13 @@ impl Worker {
                     self.warned.remove(&(user, service.to_owned()));
                     self.delete(ids).await?;
                 }
+                Err(SubmitError::Rejected) if chunk.len() > 1 => {
+                    let (first, second) = chunk.split_at(chunk.len() / 2);
+                    pending.push_front(second);
+                    pending.push_front(first);
+                }
                 Err(SubmitError::Rejected) => {
-                    tracing::warn!(
-                        service,
-                        plays = ids.len(),
-                        "the service refused these plays; dropping them"
-                    );
+                    tracing::warn!(service, user, "the service refused a play; dropping it");
                     self.delete(ids).await?;
                 }
                 Err(e) => {
@@ -174,14 +178,13 @@ impl Worker {
                         tracing::warn!(
                             service,
                             user,
-                            "the service refused the stored token; plays are kept until the \
-                             user links the account again"
+                            "the service refused the stored token; plays are kept until the                              user links the account again"
                         );
                     }
                     // This chunk and the rest of the group wait for the next try.
                     let mut failed: Vec<(i64, i64)> =
                         chunk.iter().map(|(r, _)| (r.id, r.attempts)).collect();
-                    for rest in chunks.by_ref() {
+                    for rest in pending.drain(..) {
                         failed.extend(rest.iter().map(|(r, _)| (r.id, r.attempts)));
                     }
                     self.reschedule(failed, now).await?;
