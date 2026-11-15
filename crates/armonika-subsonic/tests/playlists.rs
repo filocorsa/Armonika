@@ -1,5 +1,8 @@
 mod common;
 
+use armonika_core::access::{self, Permission};
+use armonika_core::users;
+use armonika_testdata::fixture::FixtureTags;
 use common::*;
 use serde_json::Value;
 
@@ -258,4 +261,117 @@ async fn save_and_get_play_queue_roundtrip() {
     call(&app, "savePlayQueue", &ann(), "").await;
     let v = call(&app, "getPlayQueue", &ann(), "").await;
     assert!(v["playQueue"].is_null(), "{v}");
+}
+
+fn tagged(title: &str, album: &str) -> FixtureTags {
+    FixtureTags {
+        title: Some(title.to_owned()),
+        album_title: Some(album.to_owned()),
+        artist_credit: Some("Artist".to_owned()),
+        artists: vec!["Artist".to_owned()],
+        ..FixtureTags::default()
+    }
+}
+
+#[tokio::test]
+async fn hidden_entries_come_back_in_place_after_edits_and_a_regrant() {
+    let app = app_empty().await;
+    for (rel, root, title) in [
+        ("a1.mp3", &app.music_a, "A1"),
+        ("a2.mp3", &app.music_a, "A2"),
+        ("a3.mp3", &app.music_a, "A3"),
+        ("b1.mp3", &app.music_b, "B1"),
+        ("b2.mp3", &app.music_b, "B2"),
+    ] {
+        app.put(root, rel, &tagged(title, "Album"));
+    }
+    app.scan();
+    let v = call(&app, "search3", &admin(), "query=&songCount=10").await;
+    let id_of = |title: &str| -> String {
+        v["searchResult3"]["song"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["title"] == title)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (a1, a2, a3, b1, b2) = (
+        id_of("A1"),
+        id_of("A2"),
+        id_of("A3"),
+        id_of("B1"),
+        id_of("B2"),
+    );
+
+    let toggle = |grant: bool| {
+        let db = app.db.clone();
+        let lib = app.lib_b;
+        async move {
+            db.write(move |c| {
+                let id = users::by_name(c, "ann")?.unwrap().id;
+                if grant {
+                    access::grant(c, &id, lib, Permission::Listen)
+                } else {
+                    access::revoke(c, &id, lib).map(|_| ())
+                }
+            })
+            .await
+            .unwrap();
+        }
+    };
+    toggle(true).await;
+
+    let v = call(
+        &app,
+        "createPlaylist",
+        &ann(),
+        &format!("name=Mixed&songId={a1}&songId={b1}&songId={a2}&songId={b2}&songId={a3}"),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
+    let id = v["playlist"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(entry_ids(&v), [&a1, &b1, &a2, &b2, &a3].map(Clone::clone));
+
+    // Library B is revoked: only the tracks of A show. Remove the second visible entry
+    // (A2) and add A1 again.
+    toggle(false).await;
+    let v = call(&app, "getPlaylist", &ann(), &format!("id={id}")).await;
+    assert_eq!(entry_ids(&v), [&a1, &a2, &a3].map(Clone::clone));
+    let v = call(
+        &app,
+        "updatePlaylist",
+        &ann(),
+        &format!("playlistId={id}&songIndexToRemove=1&songIdToAdd={a1}"),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
+    let v = call(&app, "getPlaylist", &ann(), &format!("id={id}")).await;
+    assert_eq!(entry_ids(&v), [&a1, &a3, &a1].map(Clone::clone));
+    toggle(true).await;
+    let v = call(&app, "getPlaylist", &ann(), &format!("id={id}")).await;
+    // The hidden entries of the removed A2 follow the entry before it.
+    assert_eq!(
+        entry_ids(&v),
+        [&a1, &b1, &b2, &a3, &a1].map(Clone::clone),
+        "{v}"
+    );
+
+    // Revoked again: createPlaylist with playlistId replaces what is visible.
+    toggle(false).await;
+    let v = call(
+        &app,
+        "createPlaylist",
+        &ann(),
+        &format!("playlistId={id}&songId={a3}&songId={a1}"),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
+    assert_eq!(entry_ids(&v), [&a3, &a1].map(Clone::clone));
+    toggle(true).await;
+    let v = call(&app, "getPlaylist", &ann(), &format!("id={id}")).await;
+    // B1 and B2 stay behind the first A1, wherever it moved.
+    assert_eq!(entry_ids(&v), [&a3, &a1, &b1, &b2].map(Clone::clone), "{v}");
 }
