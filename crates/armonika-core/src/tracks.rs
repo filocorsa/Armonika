@@ -282,7 +282,7 @@ struct Pending {
 
 /// Runs the track select with `tail` (more `WHERE` terms, `ORDER BY`, `LIMIT`) after the
 /// scope conditions.
-fn load_tracks(
+pub(crate) fn load_tracks(
     conn: &Connection,
     scope: &Scope<'_>,
     tail: &str,
@@ -722,7 +722,7 @@ pub fn genres(conn: &Connection, scope: &Scope<'_>) -> Result<Vec<(String, u32, 
 
 /// Runs the album select. `filter` adds `WHERE` terms, `having` a `HAVING` clause and
 /// `tail` the `ORDER BY` and `LIMIT`.
-fn query_albums(
+pub(crate) fn query_albums(
     conn: &Connection,
     scope: &Scope<'_>,
     filter: &str,
@@ -905,7 +905,11 @@ pub fn album_list(
 
 // --------------------------------------------------------------- artists
 
-fn query_artists(conn: &Connection, scope: &Scope<'_>, filter: &str) -> Result<Vec<ArtistView>> {
+pub(crate) fn query_artists(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    filter: &str,
+) -> Result<Vec<ArtistView>> {
     if scope.libs.is_empty() {
         return Ok(Vec::new());
     }

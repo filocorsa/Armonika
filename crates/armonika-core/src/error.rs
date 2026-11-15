@@ -102,6 +102,9 @@ pub enum Error {
     /// No library album has this identifier.
     #[error("album not found: {0}")]
     AlbumNotFound(crate::ids::LibraryAlbumId),
+    /// No artist has this identifier.
+    #[error("artist not found: {0}")]
+    ArtistNotFound(crate::ids::ArtistId),
     /// No library has this identifier.
     #[error("library not found: {0}")]
     LibraryNotFound(crate::ids::LibraryId),

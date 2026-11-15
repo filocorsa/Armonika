@@ -1,5 +1,6 @@
 //! The OpenSubsonic API of the Armonika music server, served under `/rest`.
 
+mod annotate;
 mod auth;
 mod browse;
 mod error;
@@ -216,6 +217,13 @@ async fn dispatch_payload(
         "getSongsByGenre" => browse::get_songs_by_genre(state, access, params).await,
         "search3" => search::search(state, access, params, "searchResult3").await,
         "search2" => search::search(state, access, params, "searchResult2").await,
+        "star" => annotate::star(state, access, params).await,
+        "unstar" => annotate::unstar(state, access, params).await,
+        "setRating" => annotate::set_rating(state, access, params).await,
+        "scrobble" => annotate::scrobble(state, access, params).await,
+        "getStarred2" => annotate::get_starred(state, access, "starred2").await,
+        "getStarred" => annotate::get_starred(state, access, "starred").await,
+        "getNowPlaying" => annotate::get_now_playing(state, access).await,
         "getArtistInfo2" => browse::get_artist_info2(params),
         "getAlbumInfo2" => browse::get_album_info2(params),
         "getTopSongs" => Ok(browse::get_top_songs()),
