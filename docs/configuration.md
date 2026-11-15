@@ -56,6 +56,10 @@ The design describes an `inbox` folder for each library, where files copied in w
 | `ARMONIKA_SECRET_KEY` | The key (32 bytes, base64) that encrypts the secrets the server must read back, such as app passwords and ListenBrainz tokens. Without it a key file `secret.key` is created in `data_dir`. Keep it private and do not lose it: secrets stored with another key cannot be read. |
 | `RUST_LOG` | Log level, for example `debug` or `armonika_scanner=debug`. Default `info`. |
 
+## Docker
+
+The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data` and `ARMONIKA_SERVER__BIND=0.0.0.0:4747`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` and exits with 0 when the server answers.
+
 ## If you use Armonika for a commercial service
 
 Armonika is released under the AGPL-3.0. The design document (section 7.2) says two things you must know before offering it as a commercial service:
