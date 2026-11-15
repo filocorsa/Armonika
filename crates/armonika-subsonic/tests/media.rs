@@ -91,6 +91,23 @@ async fn stream_other_library_is_70() {
 }
 
 #[tokio::test]
+async fn a_stored_path_that_leaves_the_library_is_70() {
+    let app = app_empty().await;
+    app.put(&app.music_a, "one.mp3", &tags("One"));
+    app.scan();
+    let (track, _) = first_song(&app, &admin()).await;
+    let uri = format!("/rest/stream?{}&id={track}", ann());
+    assert_eq!(get(&app, &uri).await.status, 200);
+    // A real file outside the library, so only the check can refuse it.
+    let outside = app.music_a.parent().unwrap().join("escape.mp3");
+    fs::copy(app.music_a.join("one.mp3"), &outside).unwrap();
+    app.exec("UPDATE tracks SET rel_path = '../escape.mp3'").await;
+    let reply = get(&app, &uri).await;
+    assert_eq!(error_code(&reply), 70, "{}", reply.body);
+    fs::remove_file(outside).unwrap();
+}
+
+#[tokio::test]
 async fn download_requires_download_role() {
     let app = app_empty().await;
     app.put(&app.music_a, "one.mp3", &tags("One"));

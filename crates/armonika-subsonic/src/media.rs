@@ -58,7 +58,16 @@ async fn locate(state: &AppState, access: &Access, id: &str) -> Result<Located, 
         })
         .await?
         .ok_or_else(ApiError::not_found)?;
-    let path = root.join(rel_path_from_db(&track.path));
+    let rel = rel_path_from_db(&track.path);
+    // Stored paths are relative names; anything else could point out of the library.
+    if !rel
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        tracing::error!(track = %track.id.as_str(), path = %track.path, "a stored path leaves its library");
+        return Err(ApiError::not_found());
+    }
+    let path = root.join(rel);
     Ok(Located { track, path })
 }
 
