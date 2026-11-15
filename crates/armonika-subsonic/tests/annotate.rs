@@ -195,6 +195,29 @@ async fn scrobble_submission_counts_play() {
 }
 
 #[tokio::test]
+async fn scrobble_time_in_the_future_is_clamped_to_now() {
+    let (app, ids) = app_with_song().await;
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let v = call(
+        &app,
+        "scrobble",
+        &ann(),
+        &format!("id={}&time=99999999999999", ids.track),
+    )
+    .await;
+    assert_eq!(v["status"], "ok", "{v}");
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let played = count(&app, "SELECT max(played_at) FROM play_history").await;
+    assert!((before..=after).contains(&played), "{played}");
+}
+
+#[tokio::test]
 async fn scrobble_now_playing_does_not_count() {
     let (app, ids) = app_with_song().await;
     let v = call(

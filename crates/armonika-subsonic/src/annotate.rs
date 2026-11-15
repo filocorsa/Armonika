@@ -137,13 +137,16 @@ pub async fn scrobble(
         .iter()
         .map(|raw| raw.parse().map_err(|_| ApiError::not_found()))
         .collect::<Result<_, _>>()?;
-    // The time of each play, by position; a play without one happened now.
-    let times: Vec<Option<i64>> = (0..tracks.len())
+    // The time of each play, by position; a play without one happened now, and none
+    // happens after now.
+    let now = now_ms();
+    let times: Vec<i64> = (0..tracks.len())
         .map(|i| {
             params
                 .all("time")
                 .get(i)
                 .and_then(|t| t.trim().parse::<i64>().ok())
+                .map_or(now, |t| t.min(now))
         })
         .collect();
     let submission = !params
@@ -156,7 +159,7 @@ pub async fn scrobble(
     write_visible(state, access, items, move |c| {
         for (track, time) in tracks.iter().zip(&times) {
             if submission {
-                annotations::record_play(c, &user, track, time.unwrap_or_else(now_ms))?;
+                annotations::record_play(c, &user, track, *time)?;
             } else {
                 play_queue::set_now_playing(c, &user, &client, track)?;
             }
