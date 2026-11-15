@@ -70,6 +70,11 @@ pub trait ScrobbleService: Send + Sync {
     /// The name stored in `scrobble_accounts.service` and `scrobble_outbox.service`.
     fn name(&self) -> &'static str;
 
+    /// Where the service is, for log messages. Never holds a credential.
+    fn endpoint(&self) -> String {
+        self.name().to_owned()
+    }
+
     /// The most listens one `submit` call takes.
     fn max_batch(&self) -> usize {
         100

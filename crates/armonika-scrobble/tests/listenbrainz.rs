@@ -178,3 +178,40 @@ async fn listenbrainz_validate_token() {
     );
     assert_eq!(call(move || lb2.validate_token("bad")).await, Ok(None));
 }
+
+#[tokio::test]
+async fn listenbrainz_drops_malformed_mbid_and_zero_duration() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let mut bad_mbid = listen(0);
+    bad_mbid.recording_mbid = Some("not-a-uuid".to_owned());
+    let mut zero = listen(1);
+    zero.duration_ms = Some(0);
+    let mut upper = listen(2);
+    upper.recording_mbid = Some("  AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE ".to_owned());
+    let lb = ListenBrainz::new(&server.uri());
+    for l in [bad_mbid, zero, upper] {
+        let lb = lb.clone();
+        call(move || lb.submit("t", &[l])).await.unwrap();
+    }
+    let requests = server.received_requests().await.unwrap();
+    let infos: Vec<Value> = requests
+        .iter()
+        .map(|r| {
+            let b: Value = serde_json::from_slice(&r.body).unwrap();
+            b["payload"][0]["track_metadata"]["additional_info"].clone()
+        })
+        .collect();
+    assert!(infos[0].get("recording_mbid").is_none());
+    assert!(infos[0].get("duration_ms").is_some());
+    assert!(infos[1].get("duration_ms").is_none());
+    assert!(infos[1].get("recording_mbid").is_some());
+    assert_eq!(
+        infos[2]["recording_mbid"],
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    );
+}

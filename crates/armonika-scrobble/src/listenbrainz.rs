@@ -96,6 +96,18 @@ fn classify(status: u16) -> SubmitError {
     }
 }
 
+/// The MBID in canonical lowercase form if it has the 8-4-4-4-12 hex shape. ListenBrainz
+/// refuses a whole request over a malformed one, and tags in the wild are not clean.
+fn normalize_mbid(raw: &str) -> Option<String> {
+    let id = raw.trim().to_ascii_lowercase();
+    let shaped = id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        });
+    shaped.then_some(id)
+}
+
 fn listen_json(listen: &Listen) -> Value {
     let mut info = Map::new();
     info.insert("submission_client".into(), json!("Armonika"));
@@ -103,13 +115,13 @@ fn listen_json(listen: &Listen) -> Value {
         "submission_client_version".into(),
         json!(armonika_core::VERSION),
     );
-    if let Some(v) = listen.duration_ms {
+    if let Some(v) = listen.duration_ms.filter(|d| *d > 0) {
         info.insert("duration_ms".into(), json!(v));
     }
     if let Some(v) = listen.track_number {
         info.insert("tracknumber".into(), json!(v));
     }
-    if let Some(v) = &listen.recording_mbid {
+    if let Some(v) = listen.recording_mbid.as_deref().and_then(normalize_mbid) {
         info.insert("recording_mbid".into(), json!(v));
     }
     let mut meta = Map::new();
@@ -130,6 +142,10 @@ fn listen_json(listen: &Listen) -> Value {
 impl ScrobbleService for ListenBrainz {
     fn name(&self) -> &'static str {
         NAME
+    }
+
+    fn endpoint(&self) -> String {
+        self.base.clone()
     }
 
     fn max_batch(&self) -> usize {

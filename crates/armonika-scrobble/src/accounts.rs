@@ -11,7 +11,7 @@ fn require_user(conn: &Connection, user: &UserId) -> Result<i64> {
 }
 
 /// Stores `token` of `service` for `user`, sealed with the server key, replacing an
-/// earlier one. Rows waiting in the outbox for the service become due at once, so a
+/// earlier one. Rows waiting in the outbox for the service become due at once, with their attempts reset, so a
 /// new token after a refused one sends what was kept.
 pub fn link(
     conn: &Connection,
@@ -31,7 +31,7 @@ pub fn link(
         params![user, service, sb.seal(token.as_bytes()), account_name],
     )?;
     tx.execute(
-        "UPDATE scrobble_outbox SET next_attempt_at = 0 WHERE user_id = ?1 AND service = ?2",
+        "UPDATE scrobble_outbox SET attempts = 0, next_attempt_at = 0 WHERE user_id = ?1 AND service = ?2",
         params![user, service],
     )?;
     tx.commit()?;

@@ -220,6 +220,27 @@ async fn now_playing_is_sent_once_without_retry() {
     assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 0);
 }
 
+/// Points the outbox row played at `played_at` to a track titled "Bad".
+fn make_bad(f: &common::Fixture, played_at: i64) {
+    f.db.write_blocking(|c| {
+        c.execute_batch(
+            "INSERT INTO tracks (public_id, library_id, state, rel_path, size, mtime_ms, tag_schema,
+               format, title, artist_credit, added_at, updated_at)
+             SELECT 'bad', library_id, state, 'bad.flac', size, mtime_ms, tag_schema, format,
+               'Bad', 'Artist', added_at, updated_at FROM tracks LIMIT 1;",
+        )?;
+        let bad: i64 = c.query_row("SELECT id FROM tracks WHERE public_id = 'bad'", [], |r| {
+            r.get(0)
+        })?;
+        c.execute(
+            "UPDATE scrobble_outbox SET track_id = ?1 WHERE played_at = ?2",
+            [bad, played_at],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 /// Answers 400 to any request whose payload holds a track named "Bad", 200 otherwise.
 struct RejectsBad;
 
@@ -282,15 +303,112 @@ async fn outbox_rejected_batch_drops_only_the_bad_listen() {
 }
 
 #[tokio::test]
-async fn outbox_rejected_singleton_is_dropped() {
+async fn outbox_rejected_singleton_is_dropped_when_another_play_was_accepted() {
     let f = setup();
     f.link("tok");
-    f.enqueue(1, NOW - 1000);
-    let server = server_with(400).await;
+    f.enqueue(2, NOW - 1_000_000);
+    make_bad(&f, NOW - 1_000_000 + 1);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(RejectsBad)
+        .mount(&server)
+        .await;
     let mut worker = f.worker(&server.uri());
     worker.process_due(NOW).await.unwrap();
     assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 0);
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn outbox_refusal_of_everything_keeps_all_rows() {
+    for status in [405, 410, 415, 400] {
+        let f = setup();
+        f.link("tok");
+        f.enqueue(3, NOW - 1000);
+        let server = server_with(status).await;
+        let mut worker = f.worker(&server.uri());
+        worker.process_due(NOW).await.unwrap();
+        assert_eq!(
+            f.count("SELECT count(*) FROM scrobble_outbox"),
+            3,
+            "{status}"
+        );
+        assert_eq!(f.count("SELECT min(attempts) FROM scrobble_outbox"), 1);
+        assert_eq!(
+            f.count("SELECT min(next_attempt_at) FROM scrobble_outbox"),
+            NOW + 60_000
+        );
+    }
+}
+
+#[tokio::test]
+async fn outbox_one_broken_group_does_not_block_another() {
+    let f = setup();
+    // The first user (lowest key, so first in the pass) has a token that cannot be opened.
+    f.link("tok");
+    f.enqueue(1, NOW - 1000);
+    f.db.write_blocking(|c| {
+        c.execute("UPDATE scrobble_accounts SET secret = x'0102'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    let sb = f.sb.clone();
+    let other =
+        f.db.write_blocking(|c| {
+            armonika_core::users::create(
+                c,
+                &sb,
+                armonika_core::users::NewUser {
+                    name: "bob".to_owned(),
+                    password: "bob-password".to_owned(),
+                    is_admin: false,
+                    can_download: true,
+                },
+            )
+        })
+        .unwrap();
+    let (sb, user, track) = (f.sb.clone(), other.clone(), f.track.clone());
+    f.db.write_blocking(|c| {
+        armonika_scrobble::accounts::link(c, &sb, &user, "listenbrainz", "bobtok", None)?;
+        ScrobbleSink::default().submitted(c, &user, &track, NOW - 2000)
+    })
+    .unwrap();
+    let server = server_with(200).await;
+    let mut worker = f.worker(&server.uri());
+    worker.process_due(NOW).await.unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "Token bobtok"
+    );
+    // The broken group keeps its row.
+    assert_eq!(f.count("SELECT count(*) FROM scrobble_outbox"), 1);
+}
+
+#[tokio::test]
+async fn linking_again_resets_attempts() {
+    let f = setup();
+    f.link("tok");
+    f.enqueue(1, NOW - 1000);
+    let server = server_with(503).await;
+    let mut worker = f.worker(&server.uri());
+    worker.process_due(NOW).await.unwrap();
+    assert_eq!(f.count("SELECT attempts FROM scrobble_outbox"), 1);
+    f.link("new");
+    assert_eq!(f.count("SELECT attempts FROM scrobble_outbox"), 0);
+    assert_eq!(f.count("SELECT next_attempt_at FROM scrobble_outbox"), 0);
+}
+
+#[test]
+fn warn_literals_have_no_stray_runs_of_spaces() {
+    let source = include_str!("../src/outbox.rs");
+    assert!(!source.contains("the  ") && !source.contains("until the  "));
+    assert!(!source.contains("the                 "));
 }
 
 #[tokio::test]

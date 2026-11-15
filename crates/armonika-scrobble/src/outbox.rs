@@ -100,7 +100,11 @@ impl Worker {
                 .push(row);
         }
         for ((user, service), rows) in groups {
-            self.send_group(user, &service, rows, now).await?;
+            // One group failing (a token that cannot be opened, a database error) must
+            // not hold back the others; its rows stay and are tried again next pass.
+            if let Err(e) = self.send_group(user, &service, rows, now).await {
+                tracing::warn!(service, user, error = %e, "cannot send the plays of one account");
+            }
         }
         Ok(())
     }
@@ -152,6 +156,12 @@ impl Worker {
         // listen must not take the good ones with it.
         let mut pending: std::collections::VecDeque<&[(Row, Listen)]> =
             sendable.chunks(svc.max_batch().max(1)).collect();
+        // Plays refused on their own. They are dropped only if the service accepted
+        // another play of this group in this pass: a refusal that hits every request
+        // (wrong URL, a method or media type it does not take) says nothing about the
+        // plays and must not drain the queue.
+        let mut refused: Vec<&Row> = Vec::new();
+        let mut accepted = false;
         while let Some(chunk) = pending.pop_front() {
             let batch: Vec<Listen> = chunk.iter().map(|(_, l)| l.clone()).collect();
             let (svc, token) = (svc.clone(), token.clone());
@@ -161,6 +171,7 @@ impl Worker {
             let ids: Vec<i64> = chunk.iter().map(|(r, _)| r.id).collect();
             match outcome {
                 Ok(()) => {
+                    accepted = true;
                     self.warned.remove(&(user, service.to_owned()));
                     self.delete(ids).await?;
                 }
@@ -169,16 +180,14 @@ impl Worker {
                     pending.push_front(second);
                     pending.push_front(first);
                 }
-                Err(SubmitError::Rejected) => {
-                    tracing::warn!(service, user, "the service refused a play; dropping it");
-                    self.delete(ids).await?;
-                }
+                Err(SubmitError::Rejected) => refused.push(&chunk[0].0),
                 Err(e) => {
                     if e == SubmitError::Auth && self.warned.insert((user, service.to_owned())) {
                         tracing::warn!(
                             service,
                             user,
-                            "the service refused the stored token; plays are kept until the                              user links the account again"
+                            "the service refused the stored token; plays are kept until the \
+                            user links the account again"
                         );
                     }
                     // This chunk and the rest of the group wait for the next try.
@@ -191,6 +200,27 @@ impl Worker {
                     break;
                 }
             }
+        }
+        if accepted {
+            for row in &refused {
+                tracing::warn!(
+                    service,
+                    user,
+                    track = row.track,
+                    played_at = row.played_at,
+                    "the service refused a play; dropping it"
+                );
+            }
+            self.delete(refused.iter().map(|r| r.id).collect()).await?;
+        } else if !refused.is_empty() {
+            tracing::warn!(
+                service,
+                endpoint = %svc.endpoint(),
+                plays = refused.len(),
+                "the service refused every play; keeping them and trying again later"
+            );
+            self.reschedule(refused.iter().map(|r| (r.id, r.attempts)).collect(), now)
+                .await?;
         }
         Ok(())
     }
