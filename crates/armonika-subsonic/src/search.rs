@@ -13,7 +13,7 @@ use armonika_core::tracks::{self, Scope};
 use armonika_search::{GroupLimits, SearchHits, SearchQuery};
 use serde_json::{Value, json};
 
-use crate::browse::{album_json, artist_json, request_libraries, track_json};
+use crate::browse::{MAX_OFFSET, album_json, artist_json, bounded, request_libraries, track_json};
 use crate::error::ApiError;
 use crate::response::Payload;
 use crate::{AppState, Params};
@@ -23,24 +23,6 @@ const DEFAULT_COUNT: usize = 20;
 
 /// Most items of one kind a page holds.
 const MAX_COUNT: usize = 500;
-
-/// Largest offset taken as given: more is clamped, so it cannot overflow a sum or a
-/// SQL `OFFSET`.
-const MAX_OFFSET: usize = 1_000_000_000;
-
-/// A count or offset parameter: `default` if absent, at most `max`. A number too large
-/// for the type counts as `max`; anything else that is not a number is an error.
-fn bounded(params: &Params, name: &str, default: usize, max: usize) -> Result<usize, ApiError> {
-    let Some(raw) = params.get(name) else {
-        return Ok(default);
-    };
-    let raw = raw.trim();
-    match raw.parse::<usize>() {
-        Ok(n) => Ok(n.min(max)),
-        Err(_) if !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()) => Ok(max),
-        Err(_) => Err(ApiError::generic(format!("invalid {name}"))),
-    }
-}
 
 fn limits(
     params: &Params,

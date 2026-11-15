@@ -78,6 +78,29 @@ fn number<T: std::str::FromStr>(params: &Params, name: &str, default: T) -> Resu
     }
 }
 
+/// Largest offset taken as given: more is clamped, so it cannot overflow a sum or a
+/// SQL `OFFSET`.
+pub(crate) const MAX_OFFSET: usize = 1_000_000_000;
+
+/// A count or offset parameter: `default` if absent, at most `max`. A number too large
+/// for the type counts as `max`; anything else that is not a number is an error.
+pub(crate) fn bounded(
+    params: &Params,
+    name: &str,
+    default: usize,
+    max: usize,
+) -> Result<usize, ApiError> {
+    let Some(raw) = params.get(name) else {
+        return Ok(default);
+    };
+    let raw = raw.trim();
+    match raw.parse::<usize>() {
+        Ok(n) => Ok(n.min(max)),
+        Err(_) if !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()) => Ok(max),
+        Err(_) => Err(ApiError::generic(format!("invalid {name}"))),
+    }
+}
+
 /// A number parameter that must be there.
 fn required_number<T: std::str::FromStr>(params: &Params, name: &str) -> Result<T, ApiError> {
     params
@@ -504,7 +527,7 @@ async fn album_list(
 ) -> Result<Vec<AlbumView>, ApiError> {
     let kind = album_kind(params)?;
     let size = list_size(params, "size")?;
-    let offset: usize = number(params, "offset", 0)?;
+    let offset = bounded(params, "offset", 0, MAX_OFFSET)?;
     read(state, access, params, move |c, scope| {
         tracks::album_list(c, scope, &kind, size, offset)
     })
@@ -565,7 +588,7 @@ pub async fn get_songs_by_genre(
 ) -> Result<Payload, ApiError> {
     let genre = params.require("genre")?.to_owned();
     let size = list_size(params, "count")?;
-    let offset: usize = number(params, "offset", 0)?;
+    let offset = bounded(params, "offset", 0, MAX_OFFSET)?;
     let songs = read(state, access, params, move |c, scope| {
         tracks::tracks_by_genre(c, scope, &genre, size, offset)
     })

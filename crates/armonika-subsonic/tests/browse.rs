@@ -649,3 +649,21 @@ async fn indexes_change_when_a_track_is_removed() {
     assert!(v["indexes"]["lastModified"].as_i64().unwrap() > last);
     assert!(v["indexes"].get("index").is_some());
 }
+
+#[tokio::test]
+async fn a_huge_offset_is_clamped_and_gives_an_empty_page() {
+    let app = app().await;
+    let huge = "offset=99999999999999999999";
+    for (method, node, kind, extra) in [
+        ("getAlbumList2", "albumList2", "album", "type=newest"),
+        ("getAlbumList", "albumList", "album", "type=newest"),
+        ("getSongsByGenre", "songsByGenre", "song", "genre=rock"),
+    ] {
+        let v = call(&app, method, &ann(), &format!("{extra}&{huge}")).await;
+        assert_eq!(v["status"], "ok", "{method}: {v}");
+        assert!(
+            v[node][kind].as_array().is_none_or(Vec::is_empty),
+            "{method}: {v}"
+        );
+    }
+}
