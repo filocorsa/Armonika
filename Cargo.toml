@@ -14,3 +14,11 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+# Keep target/ small: line tables are enough for readable backtraces, and
+# each test binary would otherwise carry full debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
