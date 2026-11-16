@@ -3,48 +3,106 @@
   <strong>The lightweight self-hosted music server that puts your library in order.</strong>
 </p>
 
+Armonika is a music server written in Rust. It streams your own music to the Subsonic apps you already use, and it will grow into a tool that organizes the library from the browser: recognizing tracks, fixing tags and renaming files, always with confirmation and undo.
+
 ## Status
 
-Early development. The server runs: it scans libraries, searches, streams and speaks the OpenSubsonic API, but there is no web interface yet. Expect breaking changes.
+Early development, not yet stable. The server works today with OpenSubsonic apps, but there is no web interface yet: users and libraries are managed from the command line. Expect breaking changes until the first release.
 
-Phase 0 (spikes and scaffolding) is done: the technical choices are made and measured, and CI runs on Linux, Windows and macOS. Phase 1 (listening foundations: library scan, search, streaming, OpenSubsonic API, ListenBrainz scrobbling, Docker image) is implemented and in its final checks.
+## What it does today
 
-## What it will be
+- **Scans your libraries** fully, then incrementally, and watches the folders for changes. Supported formats: MP3, FLAC, Ogg Vorbis, Opus, M4A (AAC and ALAC), WAV and AIFF.
+- **Keeps your data when files move.** Stars, ratings, play counts and playlist entries follow a file that you move, rename or retag outside Armonika. An unmounted disk is recognized and nothing is marked missing. Deleted files are only marked missing, with their data kept, and come back as they were if the file returns.
+- **Searches fast and forgivingly**: typos, missing accents and partial titles still find the track, and Chinese, Japanese and Korean titles are searchable.
+- **Streams** with seeking, and transcodes to MP3, Opus or AAC with ffmpeg when an app asks for a lower bitrate. Covers are read from the files or from the album folder.
+- **Speaks the OpenSubsonic API**: browsing, search, stars, ratings, playlists, play queue sync across devices and now playing.
+- **Several users and libraries**, with per-library access (listen or manage) and an optional ban on downloading original files.
+- **Scrobbles to ListenBrainz**, with a queue that waits out network problems.
+- **Is light**: a single binary of about 10 MB. On a test library of 100,000 tracks, search answers in about 20 ms (p95) and the idle server uses about 75 MB of RAM. Details in [Benchmarks](docs/benchmarks.md).
 
-A music server written in Rust that combines fast streaming to existing Subsonic apps with organizing the library from the browser: recognizing tracks with MusicBrainz and AcoustID, fixing tags, and renaming files, always with confirmation and undo. Optional integration with MeTube lets you add music from a link.
+## Install with Docker
 
-## How to try it
+The image `ghcr.io/filocorsa/armonika:main` runs on amd64 and arm64 (for example a Raspberry Pi 4 or 5 with a 64-bit system) and includes ffmpeg.
 
-You need a recent stable Rust toolchain (see [Development notes](docs/development.md)).
+1. Create a folder for Armonika and, inside it, the `data` folder and the configuration file. Create both before the first start: if they are missing, Docker creates them as folders owned by root and the server cannot start.
+
+   ```sh
+   mkdir armonika && cd armonika
+   mkdir data
+   cat > armonika.toml <<'EOF'
+   [[library]]
+   name = "Music"
+   path = "/music"
+   EOF
+   ```
+
+2. Copy [docker-compose.example.yml](docker-compose.example.yml) to `docker-compose.yml` in the same folder. Set `ARMONIKA_ADMIN_PASSWORD` (at least 8 characters) and replace `/path/to/your/music` with your music folder. The music is mounted read-only: Armonika never writes to a library.
+
+3. Start it:
+
+   ```sh
+   docker compose up -d
+   docker compose logs -f
+   ```
+
+   The first start creates the admin user and scans the library in the background. Search returns results once the index is built, a short while after the scan.
+
+4. Point an OpenSubsonic app (for example Symfonium, Feishin or DSub) at `http://<your-server>:4747` and log in with the admin user.
+
+The container runs as uid 1000. If your music or the `data` folder belong to another user, see the comments at the top of the compose file.
+
+### Users, libraries and ListenBrainz
+
+Run the command-line tool inside the container:
+
+```sh
+# Add a user (asks for the password) and give access to a library
+docker compose exec armonika armonika user create anna
+docker compose exec armonika armonika user grant anna Music listen
+
+# A user who may stream but not download original files
+docker compose exec armonika armonika user create guest --no-download
+
+# Link a ListenBrainz account (paste the user token from listenbrainz.org/settings)
+docker compose exec -T armonika armonika user listenbrainz anna --token-stdin <<< "your-token"
+```
+
+`armonika --help` lists every command, including adding more libraries, renaming them and scanning one now. To add a library, mount its folder in the compose file and add a `[[library]]` block to `armonika.toml`.
+
+Every setting, with its default and environment variable, is in [Configuration](docs/configuration.md).
+
+## Build from source
+
+You need a recent stable Rust toolchain and, for transcoding, ffmpeg on the `PATH`. See [Development notes](docs/development.md).
 
 ```sh
 cargo build --release
 ```
 
-Create `armonika.toml` next to where you will run it:
-
-```toml
-[[library]]
-name = "Main"
-path = "/path/to/your/music"
-```
-
-Start the server, creating the first admin from the environment (the password needs at least 8 characters):
+Create `armonika.toml` next to where you will run it, with one `[[library]]` block as above but with the real path of your music, then start the server:
 
 ```sh
 ARMONIKA_ADMIN_USER=admin ARMONIKA_ADMIN_PASSWORD=choose-a-password ./target/release/armonika serve
 ```
 
-It listens on port 4747 and scans your library in the background. Point an OpenSubsonic app (Symfonium, Feishin, DSub and others) at `http://<your-server>:4747` with that user and password. Search is empty for a short time after the first start, until the index is built. Stop it with Ctrl+C: it finishes the work in progress first.
+It listens on port 4747. Stop it with Ctrl+C: it finishes the work in progress first.
 
-Every setting, with its default and environment variable, is in [Configuration](docs/configuration.md). Run `armonika --help` for the user, library and track commands. Files in your library are only read, never changed.
+## What comes next
+
+- **Phase 2**: a web interface for users, libraries and settings, track recognition with MusicBrainz and AcoustID, tag editing, renaming and moving files, duplicate checks, all with undo.
+- **Phase 3**: adding music from a link through [MeTube](https://github.com/alexta69/metube).
 
 ## Documentation
 
-- [Design document](docs/superpowers/specs/2026-11-12-armonika-design.md) (Italian): goals, glossary, behavior, phases.
-- [Spike results](docs/spikes/README.md) (Italian): the measurements behind the technical choices.
-- [Configuration](docs/configuration.md): every setting, headless mode, notes for commercial use.
+- [Configuration](docs/configuration.md): every setting, Docker notes, headless mode, notes for commercial use.
+- [Benchmarks](docs/benchmarks.md): how the performance targets are measured, and the results.
 - [Development notes](docs/development.md): requirements, build, tests and lint.
+- [Design document](docs/superpowers/specs/2026-11-12-armonika-design.md) (Italian): goals, behavior, phases.
+- [Spike results](docs/spikes/README.md) (Italian): the measurements behind the technical choices.
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
