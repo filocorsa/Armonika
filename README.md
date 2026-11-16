@@ -7,7 +7,7 @@
 
 Early development. The server runs: it scans libraries, searches, streams and speaks the OpenSubsonic API, but there is no web interface yet. Expect breaking changes.
 
-Phase 0 (spikes and scaffolding) is done: the technical choices are made and measured, and CI runs on Linux, Windows and macOS. Phase 1 (listening foundations: library scan, search, streaming, OpenSubsonic API) is next.
+Phase 0 (spikes and scaffolding) is done: the technical choices are made and measured, and CI runs on Linux, Windows and macOS. Phase 1 (listening foundations: library scan, search, streaming, OpenSubsonic API, ListenBrainz scrobbling, Docker image) is implemented and in its final checks.
 
 ## What it will be
 
