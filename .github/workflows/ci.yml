@@ -75,6 +75,9 @@ jobs:
           toolchain: "1.99"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests reuse the cache of main; saving it takes minutes on Windows.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -104,6 +107,9 @@ jobs:
           toolchain: "1.99"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests reuse the cache of main; saving it takes minutes on Windows.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -120,6 +126,9 @@ jobs:
         with:
           toolchain: "1.99"
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests reuse the cache of main; saving it takes minutes on Windows.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo bench --workspace --no-run
 
   # Builds the server and the generator in release mode, generates 5,000 fake
@@ -142,6 +151,9 @@ jobs:
         with:
           toolchain: "1.99"
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests reuse the cache of main; saving it takes minutes on Windows.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: cargo build --release -p armonika-server -p armonika-bench -p armonika-testdata
       - name: Generate 5,000 tracks

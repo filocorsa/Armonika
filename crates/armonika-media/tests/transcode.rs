@@ -238,13 +238,11 @@ const ENCODE: TranscodePlan = TranscodePlan::Encode {
 #[tokio::test]
 async fn client_disconnect_kills_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
-    // Runs for a minute and writes nothing, ignoring a closed output: only the kill on
-    // drop can end it.
-    let fake = fake_ffmpeg(
-        dir.path(),
-        "trap '' PIPE\nsleep 60",
-        "ping -n 60 127.0.0.1 >nul",
-    );
+    // Runs until killed and writes nothing, ignoring a closed output: only the kill on
+    // drop can end it. On Windows the loop stays inside cmd: a child process such as
+    // `ping` would outlive the kill and hold the pipes open, so the test runtime would
+    // wait for it at exit.
+    let fake = fake_ffmpeg(dir.path(), "trap '' PIPE\nsleep 60", ":loop\r\ngoto loop");
     let stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
     let pid = stream.id().expect("a running process has a pid");
     tokio::time::sleep(Duration::from_millis(300)).await;
