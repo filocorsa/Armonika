@@ -23,7 +23,7 @@ An unknown key in the file, or an unknown key inside a known section in the envi
 | `transcode.format` | `mp3` | `ARMONIKA_TRANSCODE__FORMAT` | Format used when an app asks for transcoding without naming one. |
 | `transcode.bitrate_kbps` | `192` | `ARMONIKA_TRANSCODE__BITRATE_KBPS` | Bitrate used when an app asks for transcoding without naming one. |
 | `search.ignored_articles` | `The El La Los Las Le Les Il Lo Gli I` | `ARMONIKA_SEARCH__IGNORED_ARTICLES` | Words, separated by spaces, that are ignored at the start of artist names when sorting. |
-| `listenbrainz.url` | `https://api.listenbrainz.org` | `ARMONIKA_LISTENBRAINZ__URL` | ListenBrainz server for scrobbles. Change it to use a compatible server. |
+| `listenbrainz.url` | `https://api.listenbrainz.org` | `ARMONIKA_LISTENBRAINZ__URL` | ListenBrainz server for scrobbles. Change it to use a compatible server. Plays are queued and sent in the background; a play still not accepted 14 days after it was played is dropped. |
 
 The content hasher (the background job that computes a fingerprint of each track's audio so that moved and retagged files keep their identity) always runs; it has no setting.
 
@@ -70,7 +70,13 @@ The tracks then become missing, and `armonika track purge-missing` can delete th
 
 ## Docker
 
-The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data` and `ARMONIKA_SERVER__BIND=0.0.0.0:4747`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` and exits with 0 when the server answers.
+The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data` and `ARMONIKA_SERVER__BIND=0.0.0.0:4747`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` without credentials and exits with 0 when the server answers `ok` or Subsonic error 10 (credentials missing), and with 1 otherwise.
+
+Before the first `docker compose up`, create the `data` folder and `armonika.toml` next to the compose file: Docker creates a missing path as an empty folder owned by root, which the container cannot write to, and a missing `armonika.toml` becomes a folder. `docker stop` kills the process after 10 s by default; the example sets `stop_grace_period: 1m` so the server can finish its work first.
+
+## Search after a crash
+
+If the server was killed during a scan (power cut, `docker kill`, out of memory), search can miss the tracks of the last seconds of that scan. To repair it, stop the server and delete the folder `search` in `data_dir`: the next start rebuilds the index in the background.
 
 ## If you use Armonika for a commercial service
 

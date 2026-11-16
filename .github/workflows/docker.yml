@@ -10,7 +10,10 @@ on:
     paths:
       - Dockerfile
       - .dockerignore
+      - Cargo.toml
       - Cargo.lock
+      - bench/testdata/**
+      - bench/harness/**
       - crates/**
       - .github/workflows/docker.yml
   workflow_dispatch:
