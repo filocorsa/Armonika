@@ -7,8 +7,11 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bench/testdata ./bench/testdata
 COPY bench/harness ./bench/harness
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+# amd64 and arm64 build in parallel: the crate cache is locked so only one
+# build unpacks into it at a time, and each platform has its own target dir.
+ARG TARGETPLATFORM
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,id=target-$TARGETPLATFORM \
     cargo build --release --locked -p armonika-server \
     && cp target/release/armonika /armonika
 
