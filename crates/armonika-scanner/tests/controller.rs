@@ -36,6 +36,7 @@ impl Env {
         let opts = ScanOptions {
             threads: 2,
             batch: 500,
+            allow_empty: false,
         };
         let controller = ScanController::new(db.clone(), opts, tx);
         Env {
@@ -237,4 +238,14 @@ fn hasher_pauses_during_scan() {
             .unwrap()
             == 1
     });
+}
+
+#[test]
+fn no_scan_starts_after_shutdown() {
+    let env = Env::new();
+    env.add("a.mp3");
+    env.controller.shutdown();
+    env.controller.request(env.id);
+    assert!(!env.controller.status().scanning);
+    assert!(env.controller.status().libraries.is_empty());
 }

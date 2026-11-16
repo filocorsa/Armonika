@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::hasher::{Hasher, HasherHandle};
-use crate::{LibraryChange, ScanOptions, ScanProgress, ScanReport, scan_library};
+use crate::{LibraryChange, ScanError, ScanOptions, ScanProgress, ScanReport, scan_library_until};
 
 /// Where the scans of one library are.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -97,9 +97,14 @@ impl ScanController {
             .name("armonika-hasher".to_owned())
             .spawn(move || {
                 lower_priority();
-                hasher.run(db, stop, move |change| {
-                    let _ = changes.send(change);
-                });
+                let ran = panic::catch_unwind(AssertUnwindSafe(|| {
+                    hasher.run(db, stop, move |change| {
+                        let _ = changes.send(change);
+                    });
+                }));
+                if ran.is_err() {
+                    tracing::error!("the content hasher panicked and stopped");
+                }
             });
         if let Err(err) = spawned {
             tracing::error!(error = %err, "cannot start the content hasher");
@@ -110,6 +115,9 @@ impl ScanController {
     /// Asks for a scan of `library`. If one is running, one more scan starts after it,
     /// however many requests arrive meanwhile.
     pub fn request(&self, library: LibraryId) {
+        if self.inner.stop.is_cancelled() {
+            return;
+        }
         {
             let mut states = self.inner.states();
             let state = states.entry(library).or_default();
@@ -154,7 +162,8 @@ impl ScanController {
         self.inner.hasher.is_paused(library)
     }
 
-    /// Stops the content hasher. Scans already running finish.
+    /// Stops the content hasher and the scans: a running scan ends after the batch it
+    /// is writing, and no scan starts any more.
     pub fn shutdown(&self) {
         self.inner.stop.cancel();
     }
@@ -170,7 +179,7 @@ fn run_scans(inner: &Inner, library: LibraryId) {
         let outcome = {
             let _resume = Resume(&inner.hasher, library);
             panic::catch_unwind(AssertUnwindSafe(|| {
-                scan_library(
+                scan_library_until(
                     &inner.db,
                     library,
                     inner.opts,
@@ -182,6 +191,7 @@ fn run_scans(inner: &Inner, library: LibraryId) {
                     &|change| {
                         let _ = inner.changes.send(change);
                     },
+                    &|| inner.stop.is_cancelled(),
                 )
             }))
         };
@@ -195,6 +205,9 @@ fn run_scans(inner: &Inner, library: LibraryId) {
                     state.last_report = Some(report);
                     state.last_error = None;
                 }
+                Ok(Err(ScanError::Cancelled)) => {
+                    tracing::info!(library = %library, "scan stopped by shutdown");
+                }
                 Ok(Err(err)) => {
                     tracing::warn!(library = %library, error = %err, "scan failed");
                     state.last_error = Some(err.to_string());
@@ -205,10 +218,11 @@ fn run_scans(inner: &Inner, library: LibraryId) {
                 }
             }
             // A request made before this point is served by the scan that follows.
-            if state.queued {
+            if state.queued && !inner.stop.is_cancelled() {
                 state.queued = false;
                 true
             } else {
+                state.queued = false;
                 state.running = false;
                 false
             }

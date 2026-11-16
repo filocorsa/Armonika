@@ -1,0 +1,40 @@
+# Copy this file to docker-compose.yml, then edit the marked lines.
+#
+# Before the first start, in the folder of this file: run `mkdir data` and
+# create armonika.toml (see the end of this file). Docker creates a missing
+# path on the left of a volume as an empty folder owned by root: ./data is
+# then not writable for the container and armonika.toml becomes a folder
+# ("configuration file not found"). If that happened, remove them and
+# create them as above.
+#
+# The container runs as uid 1000 and only reads the music. If the music files
+# or the ./data folder are owned by another user, set `user:` to that uid and
+# gid (for example "1001:1001"), or change the owner of ./data to 1000.
+services:
+  armonika:
+    image: ghcr.io/filocorsa/armonika:main
+    # user: "1001:1001"
+    ports:
+      - "4747:4747"
+    environment:
+      ARMONIKA_ADMIN_USER: admin
+      # Required on the first start, at least 8 characters. It only creates the
+      # first admin and is ignored once an admin exists.
+      ARMONIKA_ADMIN_PASSWORD: ""
+      ARMONIKA_CONFIG: /config/armonika.toml
+    volumes:
+      - ./data:/data
+      - ./armonika.toml:/config/armonika.toml:ro
+      # Change the left side to your music folder. Read-only: Armonika never
+      # writes to a library.
+      - /path/to/your/music:/music:ro
+    restart: unless-stopped
+    # Shutdown first ends the scan batch, the scrobbles and the open requests;
+    # the Docker default of 10 s can cut it short.
+    stop_grace_period: 1m
+
+# armonika.toml, next to this file:
+#
+#   [[library]]
+#   name = "Music"
+#   path = "/music"

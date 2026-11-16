@@ -66,6 +66,16 @@ impl Lib {
         self.scan_with(ScanOptions {
             threads: 2,
             batch: 500,
+            allow_empty: false,
+        })
+        .0
+    }
+
+    /// Scans accepting an empty root, for tests that take away the only file.
+    fn scan_allow_empty(&self) -> ScanReport {
+        self.scan_with(ScanOptions {
+            allow_empty: true,
+            ..ScanOptions::default()
         })
         .0
     }
@@ -340,7 +350,7 @@ fn reappeared_file_restores_same_track() {
     let id = lib.present_at("a.mp3").unwrap();
     let away = lib.outside.path().join("a.mp3");
     fs::rename(&path, &away).unwrap();
-    assert_eq!(lib.scan().missing, 1);
+    assert_eq!(lib.scan_allow_empty().missing, 1);
 
     fs::rename(&away, &path).unwrap();
     let report = lib.scan();
@@ -364,7 +374,7 @@ fn moved_file_is_relinked_by_prefilter() {
     // Out of the library for one scan (missing), then back in another folder.
     let away = lib.outside.path().join("song.mp3");
     fs::rename(&path, &away).unwrap();
-    assert_eq!(lib.scan().missing, 1);
+    assert_eq!(lib.scan_allow_empty().missing, 1);
     fs::create_dir_all(lib.root().join("Sorted/Artist")).unwrap();
     fs::rename(&away, lib.root().join("Sorted/Artist/song.mp3")).unwrap();
 
@@ -521,6 +531,7 @@ fn changes_are_emitted_in_batches() {
     let (report, events) = lib.scan_with(ScanOptions {
         threads: 2,
         batch: 2,
+        allow_empty: false,
     });
     assert_eq!(report.new, 5);
     assert!(events.len() >= 3, "{} events", events.len());
@@ -539,4 +550,105 @@ fn symlink_loop_does_not_hang() {
     let report = lib.scan();
     assert_eq!(report.new, 1);
     assert!(lib.present_at("dir/a.mp3").is_some());
+}
+
+#[test]
+fn cancelled_scan_stops_after_the_current_batch() {
+    let lib = Lib::new();
+    for n in 1..=3 {
+        lib.add(&format!("t{n}.mp3"), &format!("Song {n}"));
+    }
+    let batches = std::cell::Cell::new(0);
+    let result = armonika_scanner::scan_library_until(
+        &lib.db,
+        lib.id,
+        ScanOptions {
+            threads: 1,
+            batch: 1,
+            allow_empty: false,
+        },
+        &|_| {},
+        &|_| batches.set(batches.get() + 1),
+        &|| batches.get() >= 1,
+    );
+    assert!(matches!(result, Err(ScanError::Cancelled)), "{result:?}");
+    assert_eq!(batches.get(), 1);
+    // What was committed stays; the next scan finishes the job.
+    let report = lib.scan();
+    assert_eq!((report.new, report.unchanged), (2, 1));
+}
+
+/// Moves every file out of the library, as a failed bind mount would look.
+fn empty_root(lib: &Lib, rels: &[&str]) {
+    for rel in rels {
+        fs::rename(lib.root().join(rel), lib.outside.path().join(rel)).unwrap();
+    }
+}
+
+#[test]
+fn empty_root_with_present_tracks_marks_nothing_missing() {
+    let lib = Lib::new();
+    lib.add("a.mp3", "One");
+    lib.add("b.mp3", "Two");
+    lib.scan();
+    empty_root(&lib, &["a.mp3", "b.mp3"]);
+
+    let (report, events) = lib.scan_with(ScanOptions::default());
+    assert!(report.empty_root_guard);
+    assert_eq!(report.missing, 0);
+    assert!(events.is_empty());
+    assert_eq!(
+        lib.count("SELECT count(*) FROM tracks WHERE state = 'present'"),
+        2
+    );
+}
+
+#[test]
+fn allow_empty_marks_the_tracks_missing() {
+    let lib = Lib::new();
+    lib.add("a.mp3", "One");
+    lib.add("b.mp3", "Two");
+    lib.scan();
+    empty_root(&lib, &["a.mp3", "b.mp3"]);
+
+    let (report, _) = lib.scan_with(ScanOptions {
+        allow_empty: true,
+        ..ScanOptions::default()
+    });
+    assert!(!report.empty_root_guard);
+    assert_eq!(report.missing, 2);
+    assert_eq!(
+        lib.count("SELECT count(*) FROM tracks WHERE state = 'present'"),
+        0
+    );
+}
+
+#[test]
+fn one_deleted_file_still_goes_missing() {
+    let lib = Lib::new();
+    lib.add("a.mp3", "One");
+    lib.add("b.mp3", "Two");
+    lib.scan();
+    fs::remove_file(lib.root().join("a.mp3")).unwrap();
+
+    let (report, _) = lib.scan_with(ScanOptions::default());
+    assert!(!report.empty_root_guard);
+    assert_eq!(report.missing, 1);
+    assert!(lib.present_at("b.mp3").is_some());
+    assert!(lib.present_at("a.mp3").is_none());
+}
+
+#[test]
+fn fresh_empty_library_scans_without_the_guard() {
+    let lib = Lib::new();
+    let report = lib.scan();
+    assert!(!report.empty_root_guard);
+    assert_eq!(report.seen, 0);
+
+    // Only missing tracks, none present: nothing to protect either.
+    lib.add("a.mp3", "One");
+    lib.scan();
+    fs::remove_file(lib.root().join("a.mp3")).unwrap();
+    assert_eq!(lib.scan_allow_empty().missing, 1);
+    assert!(!lib.scan().empty_root_guard);
 }

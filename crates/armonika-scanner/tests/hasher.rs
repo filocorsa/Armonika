@@ -73,6 +73,7 @@ impl Lib {
         let opts = ScanOptions {
             threads: 2,
             batch: 500,
+            allow_empty: false,
         };
         let report = scan_library(&self.db, self.id, opts, &|_| {}, &|c| {
             events.borrow_mut().push(c);

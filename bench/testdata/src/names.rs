@@ -8,8 +8,9 @@
 //! that way in the manifest so it is byte-identical on every platform.
 
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
-use rand::RngExt;
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 /// Longest allowed single path component, in characters.
@@ -369,11 +370,117 @@ const CJK: &[&str] = &[
     "\u{7e41}\u{661f}\u{6eff}\u{5929}",
 ];
 
+/// Size of the pseudo-word vocabulary.
+const VOCAB_SIZE: usize = 120_000;
+/// Seed of the vocabulary. It is fixed and independent of the library seed, so every library
+/// draws from the same word list and only the choice of words depends on the seed.
+const VOCAB_SEED: u64 = 20_261_113;
+
+/// Pseudo-words built from random syllables, with Zipf-like (exponent 1) selection weights:
+/// a few words are very common and most are rare, like in real titles.
+struct Vocabulary {
+    words: Vec<String>,
+    /// Cumulative Zipf weights, one per word.
+    cumulative: Vec<f64>,
+}
+
+fn make_vocabulary() -> Vocabulary {
+    const CONS: [&str; 24] = [
+        "b", "d", "f", "g", "k", "l", "m", "n", "p", "r", "s", "t", "v", "z", "br", "st", "tr",
+        "ch", "sh", "gl", "cr", "fl", "pr", "th",
+    ];
+    const VOWS: [&str; 5] = ["a", "e", "i", "o", "u"];
+    const ACCENT: [(char, &str); 8] = [
+        ('a', "\u{e1}"),
+        ('e', "\u{e9}"),
+        ('o', "\u{f6}"),
+        ('u', "\u{fc}"),
+        ('i', "\u{ef}"),
+        ('a', "\u{e5}"),
+        ('o', "\u{f8}"),
+        ('e', "\u{e8}"),
+    ];
+    let mut rng = ChaCha8Rng::seed_from_u64(VOCAB_SEED);
+    let cjk: Vec<char> = (0..400u32)
+        .map(|i| char::from_u32(0x4E00 + i * 7).expect("valid CJK code point"))
+        .collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut words: Vec<String> = Vec::with_capacity(VOCAB_SIZE);
+    while words.len() < VOCAB_SIZE {
+        let syllables = rng.random_range(2..=4usize);
+        let mut w = String::new();
+        for _ in 0..syllables {
+            w.push_str(CONS[rng.random_range(0..CONS.len())]);
+            w.push_str(VOWS[rng.random_range(0..VOWS.len())]);
+        }
+        if rng.random_range(0..100) < 3 {
+            w.push_str(["n", "r", "s", "l"][rng.random_range(0..4)]);
+        }
+        let r = rng.random_range(0..1000);
+        if r < 40 {
+            // Accent one vowel (including o-slash).
+            let (from, to) = ACCENT[rng.random_range(0..ACCENT.len())];
+            if let Some(pos) = w.find(from) {
+                w.replace_range(pos..pos + from.len_utf8(), to);
+            }
+        } else if r < 50 {
+            // L with stroke.
+            if let Some(pos) = w.find('l') {
+                w.replace_range(pos..pos + 1, "\u{142}");
+            }
+        } else if r < 70 {
+            let n = rng.random_range(2..=5usize);
+            w = (0..n)
+                .map(|_| cjk[rng.random_range(0..cjk.len())])
+                .collect();
+        }
+        if seen.insert(w.clone()) {
+            words.push(w);
+        }
+    }
+    let mut total = 0.0;
+    let cumulative = (1..=words.len())
+        .map(|rank| {
+            total += 1.0 / rank as f64;
+            total
+        })
+        .collect();
+    Vocabulary { words, cumulative }
+}
+
+static VOCABULARY: LazyLock<Vocabulary> = LazyLock::new(make_vocabulary);
+
+fn capitalize(w: &str) -> String {
+    let mut c = w.chars();
+    match c.next() {
+        Some(f) if f.is_alphabetic() => f.to_uppercase().collect::<String>() + c.as_str(),
+        _ => w.to_string(),
+    }
+}
+
+/// One capitalized pseudo-word, drawn with Zipf-like frequency.
+fn word(rng: &mut ChaCha8Rng) -> String {
+    let v = &*VOCABULARY;
+    let x = rng.random::<f64>() * v.cumulative[v.cumulative.len() - 1];
+    let idx = v
+        .cumulative
+        .partition_point(|c| *c < x)
+        .min(v.words.len() - 1);
+    capitalize(&v.words[idx])
+}
+
+/// Between `lo` and `hi` pseudo-words separated by spaces.
+fn phrase(rng: &mut ChaCha8Rng, lo: usize, hi: usize) -> String {
+    let n = rng.random_range(lo..=hi);
+    (0..n).map(|_| word(rng)).collect::<Vec<_>>().join(" ")
+}
+
 fn pick<'a>(rng: &mut ChaCha8Rng, list: &[&'a str]) -> &'a str {
     list[rng.random_range(0..list.len())]
 }
 
-/// 10% of all generated names use accents or CJK characters.
+/// 10% of all generated names use accents or CJK characters. The fixed bases are extended
+/// with a number or a pseudo-word so that they do not repeat too much.
 fn exotic(rng: &mut ChaCha8Rng) -> Option<String> {
     if rng.random_bool(0.10) {
         let base = if rng.random_bool(0.5) {
@@ -381,26 +488,26 @@ fn exotic(rng: &mut ChaCha8Rng) -> Option<String> {
         } else {
             pick(rng, CJK)
         };
-        // A short numeric tail keeps the exotic names from repeating too much.
-        if rng.random_bool(0.5) {
-            Some(format!("{base} {}", rng.random_range(2..100)))
-        } else {
-            Some(base.to_string())
+        match rng.random_range(0..6) {
+            0 => Some(base.to_string()),
+            1 | 2 => Some(format!("{base} {}", rng.random_range(2..100))),
+            _ => Some(format!("{base} {}", phrase(rng, 1, 2))),
         }
     } else {
         None
     }
 }
 
-/// An artist name such as `Anna Berg` or `The Silent River`.
+/// An artist name such as `Anna Berg`, `The Silent River` or `Brasoti Kuvema`.
 pub fn artist_name(rng: &mut ChaCha8Rng) -> String {
     if let Some(n) = exotic(rng) {
         return n;
     }
-    match rng.random_range(0..3) {
+    match rng.random_range(0..4) {
         0 => format!("{} {}", pick(rng, FIRST_NAMES), pick(rng, LAST_NAMES)),
         1 => format!("The {} {}", pick(rng, ADJECTIVES), pick(rng, NOUNS)),
-        _ => format!("{} {}", pick(rng, ADJECTIVES), pick(rng, NOUNS)),
+        2 => format!("{} {}", pick(rng, ADJECTIVES), pick(rng, NOUNS)),
+        _ => phrase(rng, 1, 3),
     }
 }
 
@@ -409,10 +516,10 @@ pub fn album_title(rng: &mut ChaCha8Rng) -> String {
     if let Some(n) = exotic(rng) {
         return n;
     }
-    match rng.random_range(0..3) {
+    match rng.random_range(0..4) {
         0 => format!("{} {}", pick(rng, ADJECTIVES), pick(rng, NOUNS)),
         1 => format!("{} the {}", pick(rng, VERBS), pick(rng, NOUNS)),
-        _ => format!("{} of {}", pick(rng, NOUNS), pick(rng, NOUNS)),
+        _ => phrase(rng, 1, 4),
     }
 }
 
@@ -422,16 +529,11 @@ pub fn track_title(rng: &mut ChaCha8Rng) -> String {
     if let Some(n) = exotic(rng) {
         return n;
     }
-    let base = match rng.random_range(0..4) {
-        0 => format!("{} {}", pick(rng, ADJECTIVES), pick(rng, NOUNS)),
-        1 => format!("{} the {}", pick(rng, VERBS), pick(rng, NOUNS)),
-        2 => format!(
-            "{} {} {}",
-            pick(rng, VERBS),
-            pick(rng, ADJECTIVES),
-            pick(rng, NOUNS)
-        ),
-        _ => format!("The {} {}", pick(rng, NOUNS), pick(rng, VERBS)),
+    let base = match rng.random_range(0..5) {
+        0 => format!("{} {}", pick(rng, ADJECTIVES), phrase(rng, 1, 3)),
+        1 => format!("{} the {}", pick(rng, VERBS), phrase(rng, 1, 3)),
+        2 => format!("The {} {}", pick(rng, NOUNS), phrase(rng, 1, 2)),
+        _ => phrase(rng, 3, 5),
     };
     match rng.random_range(0..60) {
         0 => format!("{base}?"),

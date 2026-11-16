@@ -52,6 +52,7 @@ pub(crate) fn scan(
     opts: ScanOptions,
     progress: &dyn Fn(ScanProgress),
     changes: &dyn Fn(LibraryChange),
+    cancel: &dyn Fn() -> bool,
 ) -> Result<ScanReport, ScanError> {
     let started = Instant::now();
     let root = db
@@ -77,6 +78,24 @@ pub(crate) fn scan(
         db.read_blocking(|c| Ok((present_files(c, library)?, missing_files(c, library)?)))?;
     // Step 2.
     let walked = walk::walk(&root, progress).map_err(unavailable)?;
+
+    // A root that exists but shows nothing, for a library that has tracks, is most
+    // likely an unmounted volume: leave everything as it is.
+    if walked.files.is_empty() && walked.skipped == 0 && !present.is_empty() && !opts.allow_empty {
+        tracing::warn!(
+            library = %library,
+            root = %root.display(),
+            present_tracks = present.len(),
+            "library root has no audio files but the library has tracks: nothing marked \
+             missing; check that the volume is mounted, or run `armonika library scan \
+             <name> --allow-empty` if the library was emptied on purpose"
+        );
+        return Ok(ScanReport {
+            empty_root_guard: true,
+            duration: started.elapsed(),
+            ..ScanReport::default()
+        });
+    }
 
     let mut report = ScanReport {
         seen: walked.files.len() as u64 + walked.skipped,
@@ -109,6 +128,9 @@ pub(crate) fn scan(
     let total = jobs.len() as u64;
     let mut done = 0;
     for chunk in jobs.chunks(opts.batch.max(1)) {
+        if cancel() {
+            return Err(ScanError::Cancelled);
+        }
         let reads = read_chunk(pool.as_ref(), chunk);
         report.files_read += reads.iter().filter(|r| r.is_some()).count() as u64;
         let mut change = Change::default();

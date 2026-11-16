@@ -31,6 +31,10 @@ pub struct ScanOptions {
     /// Files written per database transaction; a [`LibraryChange`] follows each one
     /// (at least 1).
     pub batch: usize,
+    /// Accept a root with no audio files as the real state of the library, so its
+    /// present tracks become missing. Off by default: an empty root is more often a
+    /// failed mount than an emptied library. Only the manual scan command sets it.
+    pub allow_empty: bool,
 }
 
 impl Default for ScanOptions {
@@ -38,6 +42,7 @@ impl Default for ScanOptions {
         ScanOptions {
             threads: std::thread::available_parallelism().map_or(4, |n| n.get().min(8)),
             batch: 500,
+            allow_empty: false,
         }
     }
 }
@@ -75,6 +80,9 @@ pub struct ScanReport {
     pub unreadable: u64,
     /// Calls to `read_file`: 0 on a scan of an unchanged library.
     pub files_read: u64,
+    /// The root has no audio files but the library has present tracks, and the scan
+    /// was not told to accept that: nothing was marked missing.
+    pub empty_root_guard: bool,
     /// How long the scan took.
     pub duration: Duration,
 }
@@ -113,6 +121,10 @@ pub enum ScanError {
     /// The database failed. The batches committed before stay.
     #[error(transparent)]
     Db(#[from] armonika_core::Error),
+    /// Stopped on request after a batch. What the batches before it wrote stays; the
+    /// files not looked at are found by the next scan.
+    #[error("the scan was cancelled")]
+    Cancelled,
 }
 
 /// Scans the library `library`: blocking, to be called from a dedicated thread.
@@ -125,5 +137,18 @@ pub fn scan_library(
     progress: &dyn Fn(ScanProgress),
     changes: &dyn Fn(LibraryChange),
 ) -> Result<ScanReport, ScanError> {
-    reconcile::scan(db, library, opts, progress, changes)
+    scan_library_until(db, library, opts, progress, changes, &|| false)
+}
+
+/// Like [`scan_library`], and stops with [`ScanError::Cancelled`] when `cancel` returns
+/// true, which is checked before each batch: the batch in progress is written first.
+pub fn scan_library_until(
+    db: &Db,
+    library: LibraryId,
+    opts: ScanOptions,
+    progress: &dyn Fn(ScanProgress),
+    changes: &dyn Fn(LibraryChange),
+    cancel: &dyn Fn() -> bool,
+) -> Result<ScanReport, ScanError> {
+    reconcile::scan(db, library, opts, progress, changes, cancel)
 }

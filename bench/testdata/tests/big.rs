@@ -8,7 +8,7 @@ use armonika_testdata::{
     AudioFormat, BigLibrarySpec, GeneratedTrack, generate_big_library, plan_big_library,
 };
 use lofty::file::TaggedFileExt;
-use lofty::tag::Accessor;
+use lofty::tag::{Accessor, ItemKey};
 
 fn all_formats() -> Vec<AudioFormat> {
     vec![
@@ -60,6 +60,75 @@ fn generates_requested_number_of_readable_files() {
         );
     }
     assert!(dir.path().join("manifest.json").is_file());
+}
+
+#[test]
+fn readback_checks_all_written_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = generate_big_library(&spec(400, 21), dir.path()).unwrap();
+    assert!(manifest.iter().any(|t| t.disc == 2));
+    assert!(manifest.iter().any(|t| t.album.is_none()));
+    for t in &manifest {
+        let full = dir.path().join(&t.path);
+        let tagged = lofty::read_from_path(&full)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", full.display()));
+        let tag = tagged
+            .primary_tag()
+            .or_else(|| tagged.first_tag())
+            .unwrap_or_else(|| panic!("no tag in {}", full.display()));
+        let ctx = full.display().to_string();
+        assert_eq!(tag.title().as_deref(), Some(t.title.as_str()), "{ctx}");
+        assert_eq!(tag.artist().as_deref(), Some(t.artist.as_str()), "{ctx}");
+        assert_eq!(tag.album().as_deref(), t.album.as_deref(), "{ctx}");
+        assert_eq!(
+            tag.get_string(ItemKey::AlbumArtist),
+            t.album_artist.as_deref(),
+            "{ctx}"
+        );
+        assert_eq!(tag.track(), Some(t.track), "{ctx}");
+        assert_eq!(tag.disk(), Some(t.disc), "{ctx}");
+        let year = tag
+            .get_string(ItemKey::Year)
+            .or_else(|| tag.get_string(ItemKey::RecordingDate))
+            .map(|y| y.chars().take(4).collect::<String>());
+        assert_eq!(year, Some(t.year.to_string()), "{ctx}");
+    }
+}
+
+#[test]
+fn vocabulary_is_large() {
+    let plan = plan_big_library(&spec(20_000, 1));
+    let words = distinct_words(&plan);
+    assert!(words >= 10_000, "only {words} distinct words");
+}
+
+fn distinct_words(plan: &[GeneratedTrack]) -> usize {
+    let mut words: HashSet<String> = HashSet::new();
+    for t in plan {
+        let fields = [Some(&t.title), Some(&t.artist), t.album.as_ref()];
+        for f in fields.into_iter().flatten() {
+            for w in f.split(|c: char| !c.is_alphanumeric()) {
+                if !w.is_empty() {
+                    words.insert(w.to_lowercase());
+                }
+            }
+        }
+    }
+    words.len()
+}
+
+/// Heavy measurement on 100,000 tracks (manifest only). Run with
+/// `cargo test --release -p armonika-testdata --test big -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_vocabulary_100k() {
+    let plan = plan_big_library(&spec(100_000, 1));
+    let words = distinct_words(&plan);
+    let titles: HashSet<&str> = plan.iter().map(|t| t.title.as_str()).collect();
+    let title_pct = pct(titles.len(), plan.len());
+    println!("distinct words {words}, unique titles {title_pct:.1}%");
+    assert!(words >= 20_000, "{words}");
+    assert!(title_pct >= 90.0, "{title_pct}");
 }
 
 #[test]

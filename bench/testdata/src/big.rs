@@ -236,6 +236,7 @@ fn write_tags(path: &Path, t: &GeneratedTrack) -> Result<()> {
     tag.set_track(t.track);
     tag.set_disk(t.disc);
     tag.insert_text(ItemKey::Year, t.year.to_string());
+    tag.insert_text(ItemKey::RecordingDate, t.year.to_string());
     tag.save_to_path(path, WriteOptions::default())
         .with_context(|| format!("writing tags to {}", path.display()))?;
     Ok(())

@@ -1,0 +1,17 @@
+target/
+.git/
+.github/
+.superpowers/
+spikes/
+images/
+docs/
+bench/data/
+data/
+music/
+inbox/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+*.local.toml

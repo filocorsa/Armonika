@@ -122,6 +122,47 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo bench --workspace --no-run
 
+  # Builds the server and the generator in release mode, generates 5,000 fake
+  # tracks and runs the benchmark harness with the hard thresholds of section 3
+  # (search p95 < 50 ms, first byte p95 < 200 ms, no file read by a second scan).
+  # A miss fails the job. The idle wait is shortened (memory is only reported) and the
+  # wait for the background content hash is capped at 10 minutes.
+  bench-smoke:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The harness itself waits up to hours for a scan; a hung server must not
+    # hold the runner that long.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p armonika-server -p armonika-bench -p armonika-testdata
+      - name: Generate 5,000 tracks
+        run: target/release/gen-big --tracks 5000 --seed 20261112 --out bench/data/big-5k
+      - name: Run the harness
+        run: >-
+          target/release/armonika-bench run
+          --library bench/data/big-5k
+          --manifest bench/data/big-5k/manifest.json
+          --binary target/release/armonika
+          --idle-secs 5
+          --quiet-timeout-secs 600
+          --out bench-results.json
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-smoke-results
+          path: bench-results.json
+          if-no-files-found: ignore
+
   text-style:
     runs-on: ubuntu-latest
     steps:

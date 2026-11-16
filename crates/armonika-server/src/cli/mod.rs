@@ -1,6 +1,7 @@
 //! Administration commands that work on the database directly, without a running
 //! server.
 
+pub mod healthcheck;
 pub mod library;
 pub mod track;
 pub mod user;
