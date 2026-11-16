@@ -360,7 +360,15 @@ impl Client {
     fn wait_ready(&self, server: &mut Server) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            if self.call("ping", &[]).is_ok() {
+            // A short timeout per probe: a server that accepts connections but
+            // never answers must not hold each probe for the 120 s of `call`.
+            let probe = self
+                .request("ping", &[])
+                .config()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .build()
+                .call();
+            if probe.is_ok_and(|r| r.status().is_success()) {
                 return Ok(());
             }
             if let Some(status) = server.child.try_wait()? {
