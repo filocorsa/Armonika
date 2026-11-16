@@ -1,0 +1,13 @@
+[package]
+name = "spike-he-aac"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+# Standalone throwaway project: not part of the Armonika workspace.
+[workspace]
+
+[dependencies]
+armonika-media = { path = "../../crates/armonika-media" }
+symphonia = { version = "0.6.1", features = ["all"] }
