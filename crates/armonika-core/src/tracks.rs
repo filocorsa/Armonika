@@ -288,14 +288,55 @@ pub(crate) fn load_tracks(
     tail: &str,
     binds: &[&dyn ToSql],
 ) -> Result<Vec<TrackView>> {
+    load_tracks_by(conn, scope, tail, binds, Lookup::Scope)
+}
+
+/// Which condition of a query finds the rows.
+///
+/// The database has no statistics (no `ANALYZE`), so SQLite guesses: an equality on
+/// both columns of the index `tracks_state (library_id, state)` looks more selective to
+/// it than a list of unique identifiers, and a page of search results read every track
+/// of the library. `ByKey` keeps the scope conditions out of the choice of index, for
+/// queries whose own condition names a few rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lookup {
+    /// The scope (libraries, state) finds the rows.
+    Scope,
+    /// The condition of the caller (identifiers, an album) finds the rows.
+    ByKey,
+}
+
+impl Lookup {
+    /// `column` in a condition: with `ByKey` a unary `+`, which SQLite never matches to
+    /// an index.
+    fn column(self, column: &str) -> String {
+        match self {
+            Lookup::Scope => column.to_owned(),
+            Lookup::ByKey => format!("+{column}"),
+        }
+    }
+}
+
+/// The track select of `user` in the libraries `libs` (a comma list) with `tail`.
+fn track_sql(user: i64, libs: &str, tail: &str, lookup: Lookup) -> String {
+    format!(
+        "{TRACK_SELECT}{user} WHERE {} = 'present' AND {} IN ({libs}) {tail}",
+        lookup.column("t.state"),
+        lookup.column("t.library_id"),
+    )
+}
+
+fn load_tracks_by(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    tail: &str,
+    binds: &[&dyn ToSql],
+    lookup: Lookup,
+) -> Result<Vec<TrackView>> {
     if scope.libs.is_empty() {
         return Ok(Vec::new());
     }
-    let sql = format!(
-        "{TRACK_SELECT}{} WHERE t.state = 'present' AND t.library_id IN ({}) {tail}",
-        scope.user_key(conn)?,
-        scope.lib_list()
-    );
+    let sql = track_sql(scope.user_key(conn)?, &scope.lib_list(), tail, lookup);
     let mut stmt = conn.prepare(&sql)?;
     let pending = stmt
         .query_map(params_from_iter(binds.iter().copied()), |r| {
@@ -479,7 +520,13 @@ pub fn album(
     else {
         return Ok(None);
     };
-    let mut tracks = load_tracks(conn, scope, &format!("AND t.library_album_id = {key}"), &[])?;
+    let mut tracks = load_tracks_by(
+        conn,
+        scope,
+        &format!("AND t.library_album_id = {key}"),
+        &[],
+        Lookup::ByKey,
+    )?;
     tracks.sort_by(album_order);
     Ok(Some((view, tracks)))
 }
@@ -570,7 +617,7 @@ pub fn tracks_by_ids(
     let texts: Vec<&str> = ids.iter().map(TrackId::as_str).collect();
     let binds: Vec<&dyn ToSql> = texts.iter().map(|t| t as &dyn ToSql).collect();
     let tail = format!("AND t.public_id IN ({})", numbered_placeholders(ids.len()));
-    let found = load_tracks(conn, scope, &tail, &binds)?;
+    let found = load_tracks_by(conn, scope, &tail, &binds, Lookup::ByKey)?;
     Ok(in_order(ids, found, |t| &t.id))
 }
 
@@ -586,7 +633,7 @@ pub fn albums_by_ids(
     let texts: Vec<&str> = ids.iter().map(LibraryAlbumId::as_str).collect();
     let binds: Vec<&dyn ToSql> = texts.iter().map(|t| t as &dyn ToSql).collect();
     let filter = format!("AND al.public_id IN ({})", numbered_placeholders(ids.len()));
-    let found = query_albums(conn, scope, &filter, "", "", &binds)?;
+    let found = query_albums_by(conn, scope, &filter, "", "", &binds, Lookup::ByKey)?;
     Ok(in_order(ids, found, |a| &a.id))
 }
 
@@ -730,11 +777,19 @@ pub(crate) fn query_albums(
     tail: &str,
     binds: &[&dyn ToSql],
 ) -> Result<Vec<AlbumView>> {
-    if scope.libs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let user = scope.user_key(conn)?;
-    let sql = format!(
+    query_albums_by(conn, scope, filter, having, tail, binds, Lookup::Scope)
+}
+
+/// The album select of `user` in the libraries `libs` (a comma list).
+fn album_sql(
+    user: i64,
+    libs: &str,
+    filter: &str,
+    having: &str,
+    tail: &str,
+    lookup: Lookup,
+) -> String {
+    format!(
         "SELECT al.id, al.public_id, al.library_id, al.title, al.sort_title, al.artist_credit,
                 al.release_mbid, al.is_singles,
                 al.date_y, al.date_m, al.date_d, al.orig_date_y, al.orig_date_m, al.orig_date_d,
@@ -746,9 +801,31 @@ pub(crate) fn query_albums(
          JOIN tracks t ON t.library_album_id = al.id AND t.state = 'present'
          LEFT JOIN album_annotations aa ON aa.album_id = al.id AND aa.user_id = {user}
          LEFT JOIN track_annotations ta ON ta.track_id = t.id AND ta.user_id = {user}
-         WHERE al.library_id IN ({}) {filter}
+         WHERE {} IN ({libs}) {filter}
          GROUP BY al.id {having} {tail}",
-        scope.lib_list()
+        lookup.column("al.library_id")
+    )
+}
+
+fn query_albums_by(
+    conn: &Connection,
+    scope: &Scope<'_>,
+    filter: &str,
+    having: &str,
+    tail: &str,
+    binds: &[&dyn ToSql],
+    lookup: Lookup,
+) -> Result<Vec<AlbumView>> {
+    if scope.libs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = album_sql(
+        scope.user_key(conn)?,
+        &scope.lib_list(),
+        filter,
+        having,
+        tail,
+        lookup,
     );
     let mut stmt = conn.prepare(&sql)?;
     let mut views = stmt
@@ -1020,4 +1097,86 @@ pub fn last_modified(conn: &Connection, scope: &Scope<'_>) -> Result<i64> {
         latest = latest.max(artist.updated_at);
     }
     Ok(latest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    /// The query plan of `sql` (its `?n` left unbound) on a library of 20,000 tracks
+    /// in 2,000 albums: SQLite guesses the size of a table from its pages, so an empty
+    /// database is planned differently.
+    fn plan(sql: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("armonika.db")).unwrap();
+        db.write_blocking(|c| {
+            c.execute_batch(
+                "INSERT INTO libraries (id, name, root, created_at) VALUES (1, 'a', '/a', 0);
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+                 INSERT INTO library_albums (id, public_id, library_id, group_key, title,
+                     artist_credit, created_at, updated_at)
+                 SELECT i, 'al-' || i, 1, 'k' || i, 'album ' || i, 'artist', 0, 0 FROM n;
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+                 INSERT INTO tracks (public_id, library_id, state, rel_path, size, mtime_ms,
+                     tag_schema, format, title, library_album_id, added_at, updated_at)
+                 SELECT 't-' || i, 1, 'present', 'f' || i || '.mp3', 1000, 0, 1, 'mp3',
+                     'title ' || i, 1 + i % 2000, 0, 0 FROM n;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let unbound = stmt.parameter_count();
+            let nulls = vec![rusqlite::types::Null; unbound];
+            let steps = stmt
+                .query_map(params_from_iter(nulls), |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(steps.join(
+                "
+",
+            ))
+        })
+        .unwrap()
+    }
+
+    // Without statistics SQLite rates the two-column library index above the unique
+    // identifiers, and the lookup of a page of search results read every track of the
+    // library.
+    #[test]
+    fn tracks_by_ids_look_up_the_identifiers() {
+        let tail = format!("AND t.public_id IN ({})", numbered_placeholders(20));
+        let plan = plan(&track_sql(1, "1", &tail, Lookup::ByKey));
+        assert!(
+            plan.starts_with("SEARCH t USING INDEX sqlite_autoindex_tracks_1 (public_id=?)"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn album_tracks_look_up_the_album() {
+        let plan = plan(&track_sql(
+            1,
+            "1",
+            "AND t.library_album_id = 7",
+            Lookup::ByKey,
+        ));
+        assert!(
+            plan.starts_with("SEARCH t USING INDEX tracks_album (library_album_id=?)"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn albums_by_ids_look_up_the_identifiers() {
+        let filter = format!("AND al.public_id IN ({})", numbered_placeholders(20));
+        let plan = plan(&album_sql(1, "1", &filter, "", "", Lookup::ByKey));
+        assert!(
+            plan.starts_with(
+                "SEARCH al USING INDEX sqlite_autoindex_library_albums_1 (public_id=?)"
+            ),
+            "{plan}"
+        );
+    }
 }
