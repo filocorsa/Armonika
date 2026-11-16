@@ -22,3 +22,10 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
+
+# Password hashing is slow on purpose; unoptimized it dominates the test time.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
