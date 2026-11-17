@@ -194,7 +194,16 @@ pub fn run(
             println!("created user {name} ({id})");
         }
         UserCommand::List => {
-            let list = db.read_blocking(users::list)?;
+            let list = db.read_blocking(|c| {
+                users::list(c)?
+                    .into_iter()
+                    .map(|user| {
+                        let links = accounts::linked(c, &user.id)?;
+                        let keys = users::api_key_labels(c, &user.id)?;
+                        Ok(Listed { user, links, keys })
+                    })
+                    .collect::<armonika_core::Result<Vec<_>>>()
+            })?;
             print_users(&list);
         }
         UserCommand::Delete { name } => {
@@ -331,17 +340,26 @@ fn find(conn: &Connection, name: &str) -> armonika_core::Result<User> {
     users::by_name(conn, name)?.ok_or_else(|| armonika_core::Error::UserNotFound(name.to_owned()))
 }
 
-fn print_users(list: &[User]) {
+/// A user with what `user list` shows under it.
+struct Listed {
+    user: User,
+    /// Linked scrobbling services with the account name, if known.
+    links: Vec<(String, Option<String>)>,
+    /// Labels of the API keys.
+    keys: Vec<String>,
+}
+
+fn print_users(list: &[Listed]) {
     if list.is_empty() {
         println!("no users");
         return;
     }
     let width = list
         .iter()
-        .map(|u| u.name.chars().count())
+        .map(|l| l.user.name.chars().count())
         .max()
         .unwrap_or(0);
-    for user in list {
+    for Listed { user, links, keys } in list {
         let mut flags = Vec::new();
         if user.is_admin {
             flags.push("admin");
@@ -353,5 +371,14 @@ fn print_users(list: &[User]) {
             flags.push("share-now-playing");
         }
         println!("{:<width$}  {}  {}", user.name, user.id, flags.join(","));
+        for (service, account) in links {
+            match account {
+                Some(account) => println!("    {service}: {account}"),
+                None => println!("    {service}: linked"),
+            }
+        }
+        if !keys.is_empty() {
+            println!("    api keys: {}", keys.join(", "));
+        }
     }
 }

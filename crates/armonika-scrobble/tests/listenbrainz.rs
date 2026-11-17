@@ -131,7 +131,7 @@ async fn listenbrainz_maps_status_to_errors() {
     for (status, expected) in [
         (500, SubmitError::Retry),
         (429, SubmitError::Retry),
-        (401, SubmitError::Auth),
+        (401, SubmitError::Auth(None)),
         (400, SubmitError::Rejected),
     ] {
         let server = MockServer::start().await;
@@ -149,6 +149,39 @@ async fn listenbrainz_maps_status_to_errors() {
         call(move || lb.submit("t", &[listen(0)])).await,
         Err(SubmitError::Retry)
     );
+}
+
+#[tokio::test]
+async fn listenbrainz_auth_refusal_keeps_the_reason_of_the_service() {
+    // What ListenBrainz answers for an account without a verified email: the token is
+    // valid, so the reason is the only hint for the user.
+    let reason = "Listens were rejected because your MetaBrainz account does not have a                   verified email address.";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_string(json!({"code": 401, "error": reason}).to_string()),
+        )
+        .mount(&server)
+        .await;
+    let lb = ListenBrainz::new(&server.uri());
+    let got = call(move || lb.submit("t", &[listen(0)])).await;
+    assert_eq!(got, Err(SubmitError::Auth(Some(reason.to_owned()))));
+
+    // A very long reason is cut to a log-sized line.
+    let server = MockServer::start().await;
+    let long = "x".repeat(1000);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_string(json!({"error": long}).to_string()),
+        )
+        .mount(&server)
+        .await;
+    let lb = ListenBrainz::new(&server.uri());
+    let Err(SubmitError::Auth(Some(cut))) = call(move || lb.submit("t", &[listen(0)])).await else {
+        panic!("expected an auth refusal with a reason");
+    };
+    assert!(cut.len() < 320 && cut.ends_with("[cut]"), "{cut}");
 }
 
 #[tokio::test]

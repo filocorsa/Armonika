@@ -182,12 +182,16 @@ impl Worker {
                 }
                 Err(SubmitError::Rejected) => refused.push(&chunk[0].0),
                 Err(e) => {
-                    if e == SubmitError::Auth && self.warned.insert((user, service.to_owned())) {
+                    if let SubmitError::Auth(reason) = &e
+                        && self.warned.insert((user, service.to_owned()))
+                    {
                         tracing::warn!(
                             service,
                             user,
-                            "the service refused the stored token; plays are kept until the \
-                            user links the account again"
+                            reason = reason.as_deref().unwrap_or("none given"),
+                            "the service refused the stored token or the account; plays are \
+                            kept and sent again later, or at once when the user links the \
+                            account again"
                         );
                     }
                     // This chunk and the rest of the group wait for the next try.

@@ -114,15 +114,43 @@ Same machine, `bench/data/big-5k`, `--idle-secs 5 --quiet-timeout-secs 0`: first
 3.4 s, second scan 0 files read, search server p95 6.9 to 8.6 ms by type, first byte p95
 2.3 ms, idle memory 29.9 MB.
 
+## Results, 50,000 tracks on a home server
+
+Intel Core i3-7100U (2 cores, 4 threads), Proxmox LXC container with 2 cores and 4 GB of
+RAM, Debian 13, library and data directory on an NVMe SSD, Linux release build of
+`82e3d30`. `gen-big --tracks 50000 --seed 1`, `--quiet-timeout-secs 0`, the page cache of
+the host dropped before each run. The machine has no HDD, so the 5-minute goal for an
+HDD is not measured.
+
+| Measure | 1 thread | 2 threads | 4 threads | 4 threads, `MALLOC_ARENA_MAX=2` | Threshold |
+|---|---|---|---|---|---|
+| First scan | 61.5 s | 59.2 s | 58.0 s | 58.4 s | indicative: 50,000 files in < 5 min on HDD |
+| Second scan, files read | 0 (1.1 s) | 0 (1.2 s) | 0 (1.1 s) | 0 (1.2 s) | 0 |
+| Search p95, worst type (prefix) | 31.1 ms | 31.7 ms | 30.6 ms | 31.8 ms | < 50 ms |
+| Search p50, all types | 12.0 ms | 12.0 ms | 12.0 ms | 12.3 ms | |
+| First byte p95 | 4.4 ms | 4.8 ms | 4.7 ms | 4.5 ms | < 200 ms |
+| Idle memory | 357.5 MB | 371.8 MB | 364.1 MB | 111.5 MB | indicative: < 100 MB |
+
+All hard thresholds pass. `scan.threads` changes the first scan by less than 6 %: on
+this machine the scan is not limited by the number of threads.
+
+### Idle memory on Linux
+
+The idle memory above 350 MB is memory that glibc keeps after the scan: it gives each busy
+thread its own pool (arena) and does not return freed memory to the system. With
+`MALLOC_ARENA_MAX=2` the same run ends at 111.5 MB, with the same scan and search times.
+The Docker image sets it; see `docs/configuration.md` for builds run outside Docker. On
+Windows the system trims the working set of an idle process, which is why the Windows
+numbers above were low from the start.
+
 ## Limits
 
 - **Synthetic data.** Tags come from a generator: name lengths, word frequencies and
   the share of accents and CJK text are not those of a real collection, and the audio
   files are tiny silent templates, so scans read little data. Search recall is not
   measured here (see spike 1).
-- **SSD.** Every number above is on an SSD. Scans and the first byte will be
-  slower on an HDD or a network share; phase 1 ends with a run on the home server
-  (plan, Task 25).
+- **SSD.** Every number above is on an SSD, the home server too. Scans and the first
+  byte will be slower on an HDD or a network share.
 - **One machine, one client.** Queries are sent one at a time from the same machine;
   concurrent clients are not measured.
 - **Background work.** With `--quiet-timeout-secs 0` the content hash runs during the
