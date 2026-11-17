@@ -54,6 +54,7 @@ The design describes an `inbox` folder for each library, where files copied in w
 | `ARMONIKA_CONFIG` | Path of the configuration file (same as `--config`). |
 | `ARMONIKA_ADMIN_USER`, `ARMONIKA_ADMIN_PASSWORD` | Create the first admin at startup when no admin exists. Ignored once an admin exists. The password is never logged, but it stays wherever it was set (compose file, `docker inspect`); prefer `armonika user create <name> --admin`, which asks it on the terminal, and use these only for unattended installs. |
 | `ARMONIKA_SECRET_KEY` | The key (32 bytes, base64) that encrypts the secrets the server must read back, such as app passwords and ListenBrainz tokens. Without it a key file `secret.key` is created in `data_dir`. Keep it private and do not lose it: secrets stored with another key cannot be read. |
+| `MALLOC_ARENA_MAX` | Not read by Armonika but by the C library on Linux (glibc): how many memory pools the process may keep. The Docker image sets `2`. Without it, after the first scan of a large library the idle server keeps the memory the scan threads used (about 360 MB instead of about 110 MB for 50,000 tracks, see `docs/benchmarks.md`). Set it to `2` when you run the binary on Linux outside Docker. |
 | `RUST_LOG` | Log level, for example `debug` or `armonika_scanner=debug`. Default `info,symphonia=warn` (the audio decoder logs one line per file at `info`). |
 
 ## Empty library folders
@@ -70,7 +71,7 @@ The tracks then become missing, and `armonika track purge-missing` can delete th
 
 ## Docker
 
-The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data` and `ARMONIKA_SERVER__BIND=0.0.0.0:4747`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` without credentials and exits with 0 when the server answers `ok` or Subsonic error 10 (credentials missing), and with 1 otherwise.
+The image `ghcr.io/filocorsa/armonika` sets `ARMONIKA_DATA_DIR=/data`, `ARMONIKA_SERVER__BIND=0.0.0.0:4747` and `MALLOC_ARENA_MAX=2`, runs as uid 1000 and has ffmpeg installed. Mount the data folder at `/data` and your music read-only (`:ro`, Armonika never writes to a library). If the music or the data folder belongs to another user, set `user:` in the compose file to that uid and gid. See `docker-compose.example.yml` for a complete example. The image checks its own health with `armonika healthcheck`, which asks the local server for `/rest/ping` without credentials and exits with 0 when the server answers `ok` or Subsonic error 10 (credentials missing), and with 1 otherwise.
 
 Before the first `docker compose up`, create the `data` folder and `armonika.toml` next to the compose file: Docker creates a missing path as an empty folder owned by root, which the container cannot write to, and a missing `armonika.toml` becomes a folder. `docker stop` kills the process after 10 s by default; the example sets `stop_grace_period: 1m` so the server can finish its work first.
 

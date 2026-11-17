@@ -24,8 +24,12 @@ RUN apt-get update \
     && chown armonika:armonika /data
 COPY --from=build /armonika /usr/local/bin/armonika
 
+# MALLOC_ARENA_MAX: glibc keeps one memory pool per busy thread and does not give the
+# freed memory back, so after the first scan of a large library the idle server held
+# about three times the memory it needs (docs/benchmarks.md).
 ENV ARMONIKA_DATA_DIR=/data \
-    ARMONIKA_SERVER__BIND=0.0.0.0:4747
+    ARMONIKA_SERVER__BIND=0.0.0.0:4747 \
+    MALLOC_ARENA_MAX=2
 USER armonika
 WORKDIR /data
 VOLUME /data
