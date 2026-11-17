@@ -85,7 +85,11 @@ docker compose exec armonika armonika user create guest --no-download
 docker compose exec armonika armonika user listenbrainz anna
 ```
 
-Passwords and tokens are asked without showing them, so they do not end up in the shell history. Do not add `-T` to these commands: it removes the terminal they ask on. Scripts can pass them on standard input with `--password-stdin` or `--token-stdin`. ListenBrainz only accepts plays from accounts with a verified email address on MetaBrainz.
+Passwords and tokens are asked without showing them, so they do not end up in the shell history. Do not add `-T` to these commands: it removes the terminal they ask on. Scripts can pass them on standard input with `--password-stdin` or `--token-stdin`.
+
+`--no-download` makes the server refuse the original files and tells the apps so. It cannot stop an app from keeping the tracks it streams in its cache: no Subsonic server can.
+
+ListenBrainz only accepts plays from accounts with a verified email address on MetaBrainz.
 
 `armonika --help` lists every command, including adding more libraries, renaming them and scanning one now. To add a library, mount its folder in the compose file and add a `[[library]]` block to `armonika.toml`.
 
