@@ -259,6 +259,15 @@ pub fn create_api_key(conn: &Connection, user: &UserId, label: &str) -> Result<S
     }
 }
 
+/// The labels of the API keys of `user`, by label. The keys themselves are not stored.
+pub fn api_key_labels(conn: &Connection, user: &UserId) -> Result<Vec<String>> {
+    let key = require_user(conn, user)?;
+    Ok(conn
+        .prepare_cached("SELECT label FROM api_keys WHERE user_id = ?1 ORDER BY label")?
+        .query_map([key], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 /// The owner of the API key `api_key`, if it exists.
 pub fn user_by_api_key(conn: &Connection, api_key: &str) -> Result<Option<UserId>> {
     Ok(conn

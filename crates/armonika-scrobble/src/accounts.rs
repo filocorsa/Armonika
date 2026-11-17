@@ -80,6 +80,19 @@ pub(crate) fn token_by_key(
     sealed.map(|s| open(sb, &s)).transpose()
 }
 
+/// The linked services of `user` with the account name the service gave at link time,
+/// by service. The tokens are not opened.
+pub fn linked(conn: &Connection, user: &UserId) -> Result<Vec<(String, Option<String>)>> {
+    let user = require_user(conn, user)?;
+    Ok(conn
+        .prepare_cached(
+            "SELECT service, account_name FROM scrobble_accounts WHERE user_id = ?1
+             ORDER BY service",
+        )?
+        .query_map([user], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 /// Every `(service, token)` of the user with internal key `user`.
 pub(crate) fn tokens_of(
     conn: &Connection,

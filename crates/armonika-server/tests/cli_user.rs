@@ -253,6 +253,22 @@ fn listenbrainz_link_validates_and_stores_the_token_encrypted() {
         "the token is stored in clear"
     );
 
+    // `user list` shows the link and the API key labels, never the token or a key.
+    let (ok, key, err) = armonika(
+        dir.path(),
+        &["user", "api-key", "create", "alice", "phone"],
+        "",
+    );
+    assert!(ok, "{key}{err}");
+    let (ok, out, err) = armonika(dir.path(), &["user", "list"], "");
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("    listenbrainz: alicelb"), "{out}");
+    assert!(out.contains("    api keys: phone"), "{out}");
+    assert!(
+        !out.contains("good-token-123") && !out.contains(key.trim()),
+        "{out}"
+    );
+
     let (ok, out, err) = armonika(
         dir.path(),
         &["user", "scrobble-unlink", "alice", "listenbrainz"],
@@ -265,4 +281,6 @@ fn listenbrainz_link_validates_and_stores_the_token_encrypted() {
         "",
     );
     assert!(ok && out.contains("was not linked"), "{out}");
+    let (_, out, _) = armonika(dir.path(), &["user", "list"], "");
+    assert!(!out.contains("listenbrainz"), "{out}");
 }
