@@ -139,9 +139,10 @@ jobs:
 
   # Every build leaves untagged versions in the package (one image per platform and its
   # provenance attestation, all held together by the tagged index), and every push to
-  # main adds a sha-* tag. This keeps the newest tagged images and deletes the rest with
-  # their platform images; untagged versions still used by a kept index are never
-  # deleted. On a pull request it only lists what it would delete.
+  # main adds a sha-* tag. This keeps main, the images of the last hour and the two
+  # newest older ones (to go back to), and deletes the rest with their platform images;
+  # untagged versions still used by a kept index are never deleted. On a pull request it
+  # only lists what it would delete.
   cleanup:
     needs: [build, merge]
     if: >-
@@ -163,7 +164,7 @@ jobs:
           # Images younger than this are left alone, so a build still running for
           # another ref (a v* tag) does not lose the platform images it just pushed.
           older-than: 1 hour
-          keep-n-tagged: 5
+          keep-n-tagged: 2
           exclude-tags: main,latest,v*
           delete-untagged: true
           delete-partial-images: true
