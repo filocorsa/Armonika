@@ -43,12 +43,14 @@ pub struct Listen {
 }
 
 /// Why a service did not take a submission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmitError {
     /// Network error, rate limit or server error: try again later.
     Retry,
     /// The service refused the credentials: keep the data, the user must link again.
-    Auth,
+    /// Holds the reason the service gave, if any: a refusal is not always a bad token
+    /// (ListenBrainz refuses listens from accounts without a verified email).
+    Auth(Option<String>),
     /// The service refused the data itself: sending it again will not help.
     Rejected,
 }
@@ -57,7 +59,7 @@ impl std::fmt::Display for SubmitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             SubmitError::Retry => "temporary failure",
-            SubmitError::Auth => "credentials refused",
+            SubmitError::Auth(_) => "credentials refused",
             SubmitError::Rejected => "data refused",
         })
     }

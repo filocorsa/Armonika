@@ -81,15 +81,33 @@ impl ListenBrainz {
             .map_err(|_| SubmitError::Retry)?;
         match response.status().as_u16() {
             200..=299 => Ok(()),
+            401 | 403 => {
+                let text = response.into_body().read_to_string().unwrap_or_default();
+                Err(SubmitError::Auth(error_text(&text)))
+            }
             status => Err(classify(status)),
         }
     }
 }
 
+/// The `error` field of a ListenBrainz error body, cut to a log-sized length.
+fn error_text(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let text = value["error"].as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    const MAX: usize = 300;
+    Some(match text.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{} [cut]", &text[..cut]),
+        None => text.to_owned(),
+    })
+}
+
 /// What a failed status means for the sender.
 fn classify(status: u16) -> SubmitError {
     match status {
-        401 | 403 => SubmitError::Auth,
+        401 | 403 => SubmitError::Auth(None),
         // 404 and 408 usually mean a wrong URL or a slow proxy: keep the data.
         404 | 408 | 429 | 500..=599 => SubmitError::Retry,
         _ => SubmitError::Rejected,
