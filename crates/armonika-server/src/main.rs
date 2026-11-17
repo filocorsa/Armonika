@@ -46,7 +46,9 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                // Symphonia logs a line per file at info (for example "using xing
+                // header for duration" on every MP3 the hasher reads).
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,symphonia=warn")),
         )
         .init();
 

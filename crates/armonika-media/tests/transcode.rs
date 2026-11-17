@@ -230,6 +230,23 @@ fn fake_ffmpeg(dir: &Path, unix: &str, windows: &str) -> std::path::PathBuf {
     }
 }
 
+/// Starts the fake ffmpeg at `fake`. On Linux, a test running at the same time can
+/// fork while this test still has the script open for writing; the child keeps that
+/// file open until it runs its own program, and running the script meanwhile fails
+/// with "Text file busy". That only lasts a moment, so try again.
+fn spawn_fake(fake: &Path) -> transcode::TranscodeStream {
+    let mut tries = 0;
+    loop {
+        match transcode::spawn(fake, Path::new("in.wav"), ENCODE, None) {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 100 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result.unwrap(),
+        }
+    }
+}
+
 const ENCODE: TranscodePlan = TranscodePlan::Encode {
     format: TargetFormat::Mp3,
     kbps: 128,
@@ -243,7 +260,7 @@ async fn client_disconnect_kills_ffmpeg() {
     // `ping` would outlive the kill and hold the pipes open, so the test runtime would
     // wait for it at exit.
     let fake = fake_ffmpeg(dir.path(), "trap '' PIPE\nsleep 60", ":loop\r\ngoto loop");
-    let stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let stream = spawn_fake(&fake);
     let pid = stream.id().expect("a running process has a pid");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(alive(pid), "the fake ffmpeg should be running");
@@ -265,7 +282,7 @@ async fn failing_ffmpeg_ends_with_an_error_before_any_audio() {
         "echo boom >&2\nexit 3",
         "echo boom 1>&2\r\nexit /b 3",
     );
-    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let mut stream = spawn_fake(&fake);
     let err = stream.prime().await.unwrap_err();
     assert!(err.to_string().contains("ffmpeg failed"), "{err}");
     // A failure is an error, then the end.
@@ -276,7 +293,7 @@ async fn failing_ffmpeg_ends_with_an_error_before_any_audio() {
 async fn ffmpeg_that_exits_cleanly_without_output_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let fake = fake_ffmpeg(dir.path(), "exit 0", "exit /b 0");
-    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let mut stream = spawn_fake(&fake);
     assert!(stream.prime().await.is_err());
 }
 
@@ -284,7 +301,7 @@ async fn ffmpeg_that_exits_cleanly_without_output_is_an_error() {
 async fn failure_after_some_audio_is_an_error_not_a_clean_end() {
     let dir = tempfile::tempdir().unwrap();
     let fake = fake_ffmpeg(dir.path(), "echo audio\nexit 1", "echo audio\r\nexit /b 1");
-    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let mut stream = spawn_fake(&fake);
     stream.prime().await.unwrap();
     let mut saw_error = false;
     while let Some(item) = stream.next().await {
@@ -303,7 +320,7 @@ async fn heavy_error_output_does_not_block_the_audio() {
         &format!("i=0\nwhile [ $i -lt 6000 ]; do echo {line} >&2; i=$((i+1)); done\necho audio"),
         &format!("for /L %%i in (1,1,6000) do @echo {line} 1>&2\r\necho audio"),
     );
-    let mut stream = transcode::spawn(&fake, Path::new("in.wav"), ENCODE, None).unwrap();
+    let mut stream = spawn_fake(&fake);
     tokio::time::timeout(Duration::from_secs(60), async {
         stream.prime().await.unwrap();
         let mut total = 0;

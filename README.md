@@ -36,6 +36,8 @@ The image `ghcr.io/filocorsa/armonika:main` runs on amd64 and arm64 (for example
    EOF
    ```
 
+   On Windows, PowerShell has no `cat <<'EOF'`: create `armonika.toml` with a text editor and the same three lines.
+
 2. Copy [docker-compose.example.yml](docker-compose.example.yml) to `docker-compose.yml` in the same folder. Set `ARMONIKA_ADMIN_PASSWORD` (at least 8 characters) and replace `/path/to/your/music` with your music folder. The music is mounted read-only: Armonika never writes to a library.
 
 3. Start it:
@@ -50,6 +52,16 @@ The image `ghcr.io/filocorsa/armonika:main` runs on amd64 and arm64 (for example
 4. Point an OpenSubsonic app (for example Symfonium, Feishin or DSub) at `http://<your-server>:4747` and log in with the admin user.
 
 The container runs as uid 1000. If your music or the `data` folder belong to another user, see the comments at the top of the compose file.
+
+The container must be able to read every folder and file of the music. Music copied from another computer, or extracted from an archive, can arrive with folders that only their owner may open. If the library folder itself cannot be read, the scan stops with an error; a folder inside it that cannot be read is skipped, with a warning in the log. Make everything readable with:
+
+```sh
+chmod -R a+rX /path/to/your/music
+```
+
+### Proxmox
+
+Docker runs inside an unprivileged LXC container once the container has the `nesting` and `keyctl` features enabled (Options, Features). Put the music on a mount point of the container and use its path inside the container in the compose file. In an unprivileged container, uid 1000 inside is uid 101000 on the Proxmox host: files written from the host must be readable by that uid, or by everyone as above.
 
 ### Users, libraries and ListenBrainz
 

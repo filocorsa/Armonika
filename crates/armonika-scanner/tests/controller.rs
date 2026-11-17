@@ -188,6 +188,49 @@ fn watcher_triggers_scan_on_new_file() {
     wait_until(15, "the watcher to trigger a scan", || env.tracks() == 1);
 }
 
+/// A folder the server cannot read (such as `lost+found` at the top of a volume) must
+/// not stop the watching of the rest of the library, including folders created later.
+#[cfg(unix)]
+#[test]
+fn watcher_skips_unreadable_folder() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    let locked = env.music.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        // Running as root: permissions do not apply, nothing to test.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let root = env
+        .db
+        .read_blocking(|c| libraries::get(c, env.id))
+        .unwrap()
+        .unwrap()
+        .root;
+    let _watch = watch::spawn(env.controller.clone(), vec![(env.id, root)], Duration::ZERO);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // A new folder: its own creation asks for a scan, which finds nothing yet.
+    let dir = env.music.path().join("Album");
+    std::fs::create_dir(&dir).unwrap();
+    wait_until(15, "the scan of the new folder", || {
+        env.state().scans_finished >= 1 && !env.state().running
+    });
+    assert_eq!(env.tracks(), 0);
+
+    // A file written into that folder later must be seen too.
+    add_song(&dir, "fresh");
+    let found = Instant::now() + Duration::from_secs(15);
+    while env.tracks() != 1 && Instant::now() < found {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(env.tracks(), 1, "the watcher did not see the new file");
+}
+
 #[test]
 fn periodic_scan_runs() {
     let env = Env::new();
