@@ -38,7 +38,7 @@ The image `ghcr.io/filocorsa/armonika:main` runs on amd64 and arm64 (for example
 
    On Windows, PowerShell has no `cat <<'EOF'`: create `armonika.toml` with a text editor and the same three lines.
 
-2. Copy [docker-compose.example.yml](docker-compose.example.yml) to `docker-compose.yml` in the same folder. Set `ARMONIKA_ADMIN_PASSWORD` (at least 8 characters) and replace `/path/to/your/music` with your music folder. The music is mounted read-only: Armonika never writes to a library.
+2. Copy [docker-compose.example.yml](docker-compose.example.yml) to `docker-compose.yml` in the same folder. Replace `/path/to/your/music` with your music folder. The music is mounted read-only: Armonika never writes to a library.
 
 3. Start it:
 
@@ -47,9 +47,15 @@ The image `ghcr.io/filocorsa/armonika:main` runs on amd64 and arm64 (for example
    docker compose logs -f
    ```
 
-   The first start creates the admin user and scans the library in the background. Search returns results once the index is built, a short while after the scan.
+   The first start scans the library in the background. Search returns results once the index is built, a short while after the scan. Until an admin exists, the log says so.
 
-4. Point an OpenSubsonic app (for example Symfonium, Feishin or DSub) at `http://<your-server>:4747` and log in with the admin user.
+4. Create the admin user. The password (at least 8 characters) is asked twice and not shown:
+
+   ```sh
+   docker compose exec armonika armonika user create admin --admin
+   ```
+
+5. Point an OpenSubsonic app (for example Symfonium, Feishin or DSub) at `http://<your-server>:4747` and log in with the admin user.
 
 The container runs as uid 1000. If your music or the `data` folder belong to another user, see the comments at the top of the compose file.
 
@@ -76,8 +82,10 @@ docker compose exec armonika armonika user grant anna Music listen
 docker compose exec armonika armonika user create guest --no-download
 
 # Link a ListenBrainz account (paste the user token from listenbrainz.org/settings)
-docker compose exec -T armonika armonika user listenbrainz anna --token-stdin <<< "your-token"
+docker compose exec armonika armonika user listenbrainz anna
 ```
+
+Passwords and tokens are asked without showing them, so they do not end up in the shell history. Do not add `-T` to these commands: it removes the terminal they ask on. Scripts can pass them on standard input with `--password-stdin` or `--token-stdin`. ListenBrainz only accepts plays from accounts with a verified email address on MetaBrainz.
 
 `armonika --help` lists every command, including adding more libraries, renaming them and scanning one now. To add a library, mount its folder in the compose file and add a `[[library]]` block to `armonika.toml`.
 
@@ -91,10 +99,11 @@ You need a recent stable Rust toolchain and, for transcoding, ffmpeg on the `PAT
 cargo build --release
 ```
 
-Create `armonika.toml` next to where you will run it, with one `[[library]]` block as above but with the real path of your music, then start the server:
+Create `armonika.toml` next to where you will run it, with one `[[library]]` block as above but with the real path of your music. From the same folder, create the admin (the password is asked) and start the server:
 
 ```sh
-ARMONIKA_ADMIN_USER=admin ARMONIKA_ADMIN_PASSWORD=choose-a-password ./target/release/armonika serve
+./target/release/armonika user create admin --admin
+./target/release/armonika serve
 ```
 
 It listens on port 4747. Stop it with Ctrl+C: it finishes the work in progress first.

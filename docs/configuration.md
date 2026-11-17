@@ -52,7 +52,7 @@ The design describes an `inbox` folder for each library, where files copied in w
 | Name | Meaning |
 | --- | --- |
 | `ARMONIKA_CONFIG` | Path of the configuration file (same as `--config`). |
-| `ARMONIKA_ADMIN_USER`, `ARMONIKA_ADMIN_PASSWORD` | Create the first admin at startup when no admin exists. Ignored once an admin exists. The password is never logged. You can also run `armonika user create <name> --admin`. |
+| `ARMONIKA_ADMIN_USER`, `ARMONIKA_ADMIN_PASSWORD` | Create the first admin at startup when no admin exists. Ignored once an admin exists. The password is never logged, but it stays wherever it was set (compose file, `docker inspect`); prefer `armonika user create <name> --admin`, which asks it on the terminal, and use these only for unattended installs. |
 | `ARMONIKA_SECRET_KEY` | The key (32 bytes, base64) that encrypts the secrets the server must read back, such as app passwords and ListenBrainz tokens. Without it a key file `secret.key` is created in `data_dir`. Keep it private and do not lose it: secrets stored with another key cannot be read. |
 | `RUST_LOG` | Log level, for example `debug` or `armonika_scanner=debug`. Default `info,symphonia=warn` (the audio decoder logs one line per file at `info`). |
 

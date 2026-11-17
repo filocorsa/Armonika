@@ -1,7 +1,9 @@
 //! The `user` command: accounts, passwords, flags, library access and API keys.
 //!
-//! Passwords are read from standard input (`--password-stdin`) or asked on the
-//! terminal without echo; they are never command-line arguments and never printed.
+//! Passwords and tokens are asked on the terminal without echo, or read from standard
+//! input with `--password-stdin` / `--token-stdin` (for scripts); they are never
+//! command-line arguments and never printed, so they do not end up in the shell
+//! history.
 //! The only secrets printed are the Subsonic password by `show-subsonic-password` and
 //! a new API key, once, by `api-key create`.
 
@@ -92,13 +94,13 @@ pub enum UserCommand {
     /// Manage API keys.
     #[command(subcommand)]
     ApiKey(ApiKeyCommand),
-    /// Link a ListenBrainz account. The token is read from standard input, checked
-    /// with ListenBrainz and stored encrypted.
+    /// Link a ListenBrainz account. The token is asked on the terminal without echo,
+    /// checked with ListenBrainz and stored encrypted.
     Listenbrainz {
         /// Login name.
         name: String,
-        /// Read the user token from the first line of standard input.
-        #[arg(long, required = true)]
+        /// Read the user token from the first line of standard input instead of asking.
+        #[arg(long)]
         token_stdin: bool,
     },
     /// Unlink a scrobbling service: deletes the stored token and the plays still
@@ -153,16 +155,19 @@ impl PasswordSource {
             line.truncate(end);
             return Ok(line);
         }
-        let first = rpassword::prompt_password("Password: ")
-            .context("cannot read the password from the terminal")?;
-        let second = rpassword::prompt_password("Repeat password: ")
-            .context("cannot read the password from the terminal")?;
+        let first = rpassword::prompt_password("Password: ").context(NO_TERMINAL_PASSWORD)?;
+        let second =
+            rpassword::prompt_password("Repeat password: ").context(NO_TERMINAL_PASSWORD)?;
         if first != second {
             bail!("the passwords do not match");
         }
         Ok(first)
     }
 }
+
+const NO_TERMINAL_PASSWORD: &str = "cannot read the password from the terminal (with `docker compose exec -T` there is none: drop -T, or pass --password-stdin)";
+
+const NO_TERMINAL_TOKEN: &str = "cannot read the token from the terminal (with `docker compose exec -T` there is none: drop -T, or pass --token-stdin)";
 
 /// Runs a `user` subcommand on the database `db`.
 pub fn run(
@@ -262,9 +267,12 @@ pub fn run(
             println!("{key}");
         }
         UserCommand::Listenbrainz { name, token_stdin } => {
-            debug_assert!(token_stdin);
             let user = db.read_blocking(|c| find(c, &name))?;
-            let token = read_token()?;
+            let token = if token_stdin {
+                read_token()?
+            } else {
+                prompt_token()?
+            };
             let checked = ListenBrainz::new(listenbrainz_url).validate_token(&token);
             let account = match checked {
                 Ok(Some(account)) => account,
@@ -305,6 +313,16 @@ fn read_token() -> anyhow::Result<String> {
     let token = line.trim();
     if read == 0 || token.is_empty() {
         bail!("no token on standard input");
+    }
+    Ok(token.to_owned())
+}
+
+/// Asks the ListenBrainz token on the terminal without echo.
+fn prompt_token() -> anyhow::Result<String> {
+    let line = rpassword::prompt_password("ListenBrainz token: ").context(NO_TERMINAL_TOKEN)?;
+    let token = line.trim();
+    if token.is_empty() {
+        bail!("no token given");
     }
     Ok(token.to_owned())
 }
