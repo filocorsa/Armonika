@@ -290,7 +290,8 @@ Questa sezione definisce in modo preciso cosa significa "multi-utente". Le scelt
 **Permesso "download offline"** *(decisa con l'utente)*
 - È un permesso dell'account, non della libreria: l'admin lo attiva o disattiva per ogni utente. È attivo di default.
 - Permette di salvare tracce sul proprio dispositivo per ascoltarle offline (funzione delle app Subsonic, permesso `downloadRole` dell'API Subsonic) e di scaricare il file di una traccia dall'interfaccia web.
-- Vale solo per le librerie a cui l'utente ha accesso. Senza questo permesso l'utente può solo ascoltare in streaming.
+- Vale solo per le librerie a cui l'utente ha accesso. Senza questo permesso il server rifiuta lo scaricamento del file originale (`download`, errore 50) e comunica `downloadRole=false` alle app.
+- **Limite** *(deciso con l'utente, 2026-11-17)*: il permesso non impedisce a un'app di tenersi i brani ascoltati in streaming (cache, precaricamento), perché il server non distingue un ascolto da un salvataggio; Symfonium lo fa, Navidrome e Jellyfin hanno lo stesso limite. Armonika non prova a impedirlo (niente transcodifica forzata, niente DRM): chi vuole un sistema chiuso non usa le API OpenSubsonic. Il permesso significa "non ti do il file originale", non "non potrai tenere la canzone".
 - Da non confondere con "aggiungere musica" al server, che dipende dal permesso di gestione.
 
 **Nuovo utente** *(decisa con l'utente)*
