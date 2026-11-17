@@ -16,11 +16,12 @@ services:
     # user: "1001:1001"
     ports:
       - "4747:4747"
+    # The first admin is created after the first start with
+    # `docker compose exec armonika armonika user create <name> --admin`, which asks
+    # the password without keeping it anywhere. For unattended installs,
+    # ARMONIKA_ADMIN_USER and ARMONIKA_ADMIN_PASSWORD can do it instead (see
+    # docs/configuration.md), but then the password stays written in this file.
     environment:
-      ARMONIKA_ADMIN_USER: admin
-      # Required on the first start, at least 8 characters. It only creates the
-      # first admin and is ignored once an admin exists.
-      ARMONIKA_ADMIN_PASSWORD: ""
       ARMONIKA_CONFIG: /config/armonika.toml
     volumes:
       - ./data:/data
