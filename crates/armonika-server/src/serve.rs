@@ -5,6 +5,7 @@
 //! controller: a scan of every library, folder watching and periodic rescans.
 
 use std::future::IntoFuture;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -262,7 +263,13 @@ async fn start_scanning(
         .recognition
         .background_fingerprint
         .then(|| FingerprintOptions {
-            ffmpeg: config.ffmpeg_path.clone(),
+            // Like the transcoder: without a configured path, ffmpeg is looked up in PATH.
+            ffmpeg: Some(
+                config
+                    .ffmpeg_path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("ffmpeg")),
+            ),
         });
     let controller = ScanController::new(db.clone(), opts, changes, fingerprint);
     let libraries = db

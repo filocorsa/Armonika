@@ -61,13 +61,15 @@ type Compute = fn(&Path, Option<&Path>) -> Result<AudioFingerprint, FingerprintE
 pub fn run(db: &Db, opts: &FingerprintOptions, gate: &WorkGate, stop: &CancellationToken) {
     while !stop.is_cancelled() {
         let report = fingerprint_pending(db, opts, gate, stop);
-        if report != FingerprintReport::default() {
+        if report.done + report.failed > 0 {
             tracing::info!(
                 done = report.done,
                 failed = report.failed,
                 skipped = report.skipped,
                 "fingerprint pass finished"
             );
+        } else if report.skipped > 0 {
+            tracing::debug!(skipped = report.skipped, "fingerprint pass only skipped");
         }
         // Sleep in short slices so that a stop is heard at once.
         let mut waited = Duration::ZERO;
@@ -173,6 +175,12 @@ fn process(
         return Ok(Step::Skipped);
     }
     let computed = compute_isolated(&abs, opts.ffmpeg.as_deref(), compute);
+    // An I/O error (a share that hiccups, a file in use, ffmpeg that cannot be started)
+    // says nothing about the audio: the track stays pending for a later pass.
+    if let Err(Failure::Transient(reason)) = &computed {
+        tracing::debug!(path = %abs.display(), error = %reason, "cannot read file to fingerprint it");
+        return Ok(Step::Skipped);
+    }
     if !still_as_scanned(&abs, job) {
         return Ok(Step::Skipped);
     }
@@ -183,7 +191,7 @@ fn process(
                 fingerprints::store(&tx, &job.content_hash, &fp.fingerprint, fp.decoder.as_str())?;
                 Step::Done
             }
-            Err(reason) => {
+            Err(Failure::Audio(reason) | Failure::Transient(reason)) => {
                 tracing::warn!(path = %abs.display(), error = %reason, "cannot fingerprint file");
                 fingerprints::store_failure(&tx, &job.content_hash, reason)?;
                 Step::Failed
@@ -201,26 +209,35 @@ fn still_as_scanned(abs: &Path, job: &FingerprintJob) -> bool {
         .unwrap_or(false)
 }
 
+/// Why a file gave no fingerprint.
+enum Failure {
+    /// The audio itself: stored, the file is not tried again.
+    Audio(String),
+    /// A read or process error that may pass: not stored.
+    Transient(String),
+}
+
 /// Fingerprints one file; a panic of a decoder on a malformed file is an error of that
 /// file only.
 fn compute_isolated(
     path: &Path,
     ffmpeg: Option<&Path>,
     compute: Compute,
-) -> Result<AudioFingerprint, String> {
+) -> Result<AudioFingerprint, Failure> {
     match panic::catch_unwind(AssertUnwindSafe(|| compute(path, ffmpeg))) {
         Ok(Ok(fp)) => Ok(fp),
-        Ok(Err(err)) => Err(err.to_string()),
+        Ok(Err(err @ FingerprintError::Io { .. })) => Err(Failure::Transient(err.to_string())),
+        Ok(Err(err)) => Err(Failure::Audio(err.to_string())),
         Err(payload) => {
             let message = payload
                 .downcast_ref::<&str>()
                 .map(|s| (*s).to_owned())
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_default();
-            Err(format!(
+            Err(Failure::Audio(format!(
                 "the audio decoder failed on {}: {message}",
                 path.display()
-            ))
+            )))
         }
     }
 }
@@ -257,8 +274,59 @@ mod tests {
         fn boom(_: &Path, _: Option<&Path>) -> Result<AudioFingerprint, FingerprintError> {
             panic!("bad frame");
         }
-        let err = compute_isolated(Path::new("x.mp3"), None, boom).unwrap_err();
+        let Err(Failure::Audio(err)) = compute_isolated(Path::new("x.mp3"), None, boom) else {
+            panic!("a panic is an error of the audio");
+        };
         assert!(err.contains("bad frame"), "{err}");
+    }
+
+    fn io_failure(path: &Path, _: Option<&Path>) -> Result<AudioFingerprint, FingerprintError> {
+        Err(FingerprintError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other("share went away"),
+        })
+    }
+
+    #[test]
+    fn an_io_error_leaves_the_track_pending() {
+        let data = tempfile::tempdir().unwrap();
+        let music = tempfile::tempdir().unwrap();
+        let db = Db::open(&data.path().join("armonika.db")).unwrap();
+        let lib = db
+            .write_blocking(|c| libraries::create(c, "Music", music.path(), data.path()))
+            .unwrap();
+        let file = music.path().join("a.mp3");
+        fs::write(&file, b"audio").unwrap();
+        let meta = fs::metadata(&file).unwrap();
+        db.write_blocking(|c| {
+            c.execute(
+                "INSERT INTO tracks (public_id, library_id, state, rel_path, size, mtime_ms,
+                                     tag_schema, format, added_at, updated_at, content_hash,
+                                     hash_state)
+                 VALUES ('t', ?1, 'present', 'a.mp3', ?2, ?3, 1, 'mp3', 0, 0, x'01', 'done')",
+                rusqlite::params![
+                    lib.0,
+                    i64::try_from(meta.len()).unwrap(),
+                    mtime_ms(&meta).unwrap()
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let report = fingerprint_pending_with(
+            &db,
+            &FingerprintOptions::default(),
+            &WorkGate::new(),
+            &CancellationToken::new(),
+            io_failure,
+        );
+        assert_eq!(
+            (report.done, report.failed, report.skipped),
+            (0, 0, 1),
+            "{report:?}"
+        );
+        let state = db.read_blocking(|c| fingerprints::state(c, &[1])).unwrap();
+        assert_eq!(state, FingerprintState::Pending);
     }
 
     #[test]

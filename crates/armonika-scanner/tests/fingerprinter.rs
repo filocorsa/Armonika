@@ -103,7 +103,7 @@ fn fingerprints_after_the_content_hash() {
 }
 
 #[test]
-fn undecodable_file_is_recorded_as_failure() {
+fn too_short_file_is_recorded_as_failure() {
     let lib = Lib::new();
     // A file the content hash can read but that has too little audio to fingerprint
     // (the codec-patched m4a would not even get a content hash).
