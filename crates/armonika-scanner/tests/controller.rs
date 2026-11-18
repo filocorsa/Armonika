@@ -38,7 +38,7 @@ impl Env {
             batch: 500,
             allow_empty: false,
         };
-        let controller = ScanController::new(db.clone(), opts, tx);
+        let controller = ScanController::new(db.clone(), opts, tx, None);
         Env {
             _data: data,
             music,

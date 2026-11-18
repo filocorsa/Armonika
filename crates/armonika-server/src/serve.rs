@@ -18,6 +18,7 @@ use armonika_core::libraries;
 use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, BootstrapOutcome};
 use armonika_scanner::controller::ScanController;
+use armonika_scanner::fingerprinter::{FingerprintOptions, ffmpeg_or_default};
 use armonika_scanner::{ScanOptions, watch};
 use armonika_scrobble::listenbrainz::ListenBrainz;
 use armonika_scrobble::{ScrobbleService, ScrobbleSink, outbox};
@@ -257,7 +258,14 @@ async fn start_scanning(
         threads: config.scan.threads.max(1),
         ..defaults
     };
-    let controller = ScanController::new(db.clone(), opts, changes);
+    let fingerprint = config
+        .recognition
+        .background_fingerprint
+        .then(|| FingerprintOptions {
+            // Like the transcoder: without a configured path, ffmpeg is looked up in PATH.
+            ffmpeg: Some(ffmpeg_or_default(config.ffmpeg_path.clone())),
+        });
+    let controller = ScanController::new(db.clone(), opts, changes, fingerprint);
     let libraries = db
         .read(libraries::list)
         .await

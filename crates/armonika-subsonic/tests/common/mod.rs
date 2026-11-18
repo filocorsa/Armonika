@@ -111,7 +111,7 @@ async fn build(with_tracks: bool, media: MediaConfig) -> App {
     let search: Arc<dyn SearchIndex> =
         Arc::new(TantivyIndex::open(&dir.path().join("search")).unwrap());
     let (changes, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let scans = ScanController::new(db.clone(), ScanOptions::default(), changes);
+    let scans = ScanController::new(db.clone(), ScanOptions::default(), changes, None);
     let cache_dir = dir.path().join("data").join("cache").join("covers");
     let state = AppState {
         db: db.clone(),

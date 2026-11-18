@@ -5,7 +5,8 @@
 //! opus; `ilst` for m4a); a field missing there is taken from the other tags in the
 //! file, if any (for example ID3v1, APE or RIFF INFO).
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -20,7 +21,7 @@ use lofty::tag::{ItemKey, Tag, TagType};
 /// every change to either: the scanner reads again every track read with an older
 /// version, so a tag added later does not stay empty on files whose size and date did
 /// not change.
-pub const TAG_SCHEMA_VERSION: u32 = 1;
+pub const TAG_SCHEMA_VERSION: u32 = 2;
 
 /// Why a file could not be read.
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +88,12 @@ pub fn read_file(path: &Path) -> Result<FileFacts, ProbeError> {
         sample_rate: props.sample_rate().filter(|r| *r > 0),
         channels: props.channels().filter(|c| *c > 0),
         bit_depth: props.bit_depth().filter(|b| *b > 0),
-        tags: read_tags(&tagged),
+        tags: TagFacts {
+            id3v2_major: (format == AudioFormat::Mp3)
+                .then(|| id3v2_major(path))
+                .flatten(),
+            ..read_tags(&tagged)
+        },
     })
 }
 
@@ -99,6 +105,42 @@ pub fn mtime_ms(meta: &fs::Metadata) -> std::io::Result<i64> {
         Ok(after) => i64::try_from(after.as_millis()).unwrap_or(i64::MAX),
         Err(before) => -i64::try_from(before.duration().as_millis()).unwrap_or(i64::MAX),
     })
+}
+
+/// The major version of the ID3v2 header at the start of the file, if there is one.
+fn id3v2_major(path: &Path) -> Option<u8> {
+    let mut head = [0u8; 10];
+    File::open(path).ok()?.read_exact(&mut head).ok()?;
+    (&head[..3] == b"ID3" && matches!(head[3], 3 | 4)).then_some(head[3])
+}
+
+/// ISRCs from the raw values of the tag: split on NUL, `;`, `/`, `,` and whitespace,
+/// hyphens removed, upper case, only well-formed codes, no duplicates.
+fn normalize_isrcs(values: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for code in values
+        .iter()
+        .flat_map(|v| {
+            v.split(|c: char| c == '\0' || c == ';' || c == '/' || c == ',' || c.is_whitespace())
+        })
+        .map(|c| c.replace('-', "").to_ascii_uppercase())
+    {
+        if is_isrc(&code) && !out.contains(&code) {
+            out.push(code);
+        }
+    }
+    out
+}
+
+/// `^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$`
+fn is_isrc(code: &str) -> bool {
+    let b = code.as_bytes();
+    b.len() == 12
+        && b[..2].iter().all(u8::is_ascii_uppercase)
+        && b[2..5]
+            .iter()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && b[5..].iter().all(u8::is_ascii_digit)
 }
 
 fn format_of(file_type: FileType) -> Option<AudioFormat> {
@@ -255,6 +297,8 @@ fn read_tags(tagged: &TaggedFile) -> TagFacts {
         mb_work_id: tags.text(ItemKey::MusicBrainzWorkId),
         mb_artist_ids: mb_ids(ItemKey::MusicBrainzArtistId),
         mb_album_artist_ids: mb_ids(ItemKey::MusicBrainzReleaseArtistId),
+        isrcs: normalize_isrcs(tags.texts(ItemKey::Isrc)),
+        id3v2_major: None,
     }
 }
 

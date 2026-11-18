@@ -47,8 +47,8 @@ fn each_format(tags: &FixtureTags, mut check: impl FnMut(&str, AudioFormat, &Tag
 }
 
 #[test]
-fn tag_schema_version_is_one() {
-    assert_eq!(TAG_SCHEMA_VERSION, 1);
+fn tag_schema_version_is_two() {
+    assert_eq!(TAG_SCHEMA_VERSION, 2);
 }
 
 #[test]
@@ -310,7 +310,12 @@ fn missing_tags_are_none() {
         ..Default::default()
     };
     each_format(&tags, |ext, _, t| {
-        assert_eq!(t, &TagFacts::default(), "{ext}");
+        // An mp3 written with a (blank) ID3v2 tag still reports the header version.
+        let t = TagFacts {
+            id3v2_major: None,
+            ..t.clone()
+        };
+        assert_eq!(t, TagFacts::default(), "{ext}");
     });
 }
 
@@ -476,4 +481,88 @@ fn falls_back_to_other_tags() {
     let facts = read_file(Path::new(&path)).unwrap();
     assert_eq!(facts.tags.title, s("From INFO"));
     assert_eq!(facts.tags.artist_credit, s("Someone"));
+}
+
+fn mp3_facts(dir: &Path, name: &str, tags: &FixtureTags) -> TagFacts {
+    let path = tagged_file(dir, name, TemplateFormat::Mp3, tags);
+    read_file(&path).unwrap().tags
+}
+
+#[test]
+fn reads_isrc_normalized() {
+    let dir = tempfile::tempdir().unwrap();
+    let tags = FixtureTags {
+        isrcs: v(&["us-s1z-99-00001"]),
+        ..FixtureTags::default()
+    };
+    assert_eq!(
+        mp3_facts(dir.path(), "a.mp3", &tags).isrcs,
+        vec!["USS1Z9900001"]
+    );
+}
+
+#[test]
+fn reads_isrc_in_every_format() {
+    let tags = FixtureTags {
+        isrcs: v(&["USS1Z9900001"]),
+        ..FixtureTags::default()
+    };
+    each_format(&tags, |ext, _, t| {
+        assert_eq!(t.isrcs, vec!["USS1Z9900001"], "{ext}");
+    });
+}
+
+#[test]
+fn isrc_values_are_split_deduplicated_and_filtered() {
+    let dir = tempfile::tempdir().unwrap();
+    let tags = FixtureTags {
+        isrcs: v(&["usS1Z9900001; GBAYE0601498/USS1Z9900001, bad"]),
+        ..FixtureTags::default()
+    };
+    assert_eq!(
+        mp3_facts(dir.path(), "a.mp3", &tags).isrcs,
+        vec!["USS1Z9900001", "GBAYE0601498"]
+    );
+}
+
+#[test]
+fn drops_invalid_isrc() {
+    let dir = tempfile::tempdir().unwrap();
+    let tags = FixtureTags {
+        isrcs: v(&["not an isrc"]),
+        ..FixtureTags::default()
+    };
+    assert!(mp3_facts(dir.path(), "a.mp3", &tags).isrcs.is_empty());
+}
+
+#[test]
+fn reports_id3v2_major_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let v23 = mp3_facts(
+        dir.path(),
+        "v23.mp3",
+        &FixtureTags {
+            title: s("T"),
+            id3v23: true,
+            ..FixtureTags::default()
+        },
+    );
+    let v24 = mp3_facts(
+        dir.path(),
+        "v24.mp3",
+        &FixtureTags {
+            title: s("T"),
+            ..FixtureTags::default()
+        },
+    );
+    let flac = read_file(&tagged_file(
+        dir.path(),
+        "a.flac",
+        TemplateFormat::Flac,
+        &FixtureTags::default(),
+    ))
+    .unwrap();
+    assert_eq!(v23.id3v2_major, Some(3));
+    assert_eq!(v24.id3v2_major, Some(4));
+    assert_eq!(flac.tags.id3v2_major, None);
 }

@@ -14,15 +14,14 @@
 //! 3. A file that cannot be read is `failed` and is not tried again until the scan
 //!    sees it change (the scan makes it `pending` then).
 //!
-//! The work pauses for the libraries named by [`HasherHandle::pause`], which the scan
+//! The work pauses for the libraries named by [`WorkGate::pause`], which the scan
 //! controller does while it scans them: `pause` returns when the hasher is no longer
 //! working on a track of that library. Files are only read.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use armonika_core::albums::track_album;
@@ -39,6 +38,8 @@ use rusqlite::{OptionalExtension, params};
 use tokio_util::sync::CancellationToken;
 
 use crate::LibraryChange;
+use crate::fingerprinter::Nudge;
+use crate::gate::WorkGate;
 use crate::reconcile::{Change, link_new, read_isolated, write_track};
 
 /// Tracks hashed per database read.
@@ -65,33 +66,13 @@ pub struct HashReport {
     pub skipped: u64,
 }
 
-/// What the hasher and the scan controller share.
-#[derive(Debug, Default)]
-struct Shared {
-    state: Mutex<State>,
-    /// Signalled when the hasher finishes a track.
-    idle: Condvar,
-}
-
-#[derive(Debug, Default)]
-struct State {
-    paused: HashSet<LibraryId>,
-    /// The library of the track being hashed now.
-    busy: Option<LibraryId>,
-}
-
-impl Shared {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        // A set of ids stays valid whatever a panicking holder was doing.
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
 /// The background hasher. Create it once, give [`Hasher::handle`] to whoever scans, and
 /// run [`Hasher::run`] on a thread of its own.
 #[derive(Clone, Debug)]
 pub struct Hasher {
-    shared: Arc<Shared>,
+    gate: WorkGate,
+    /// Woken when tracks got their hash: the fingerprinter has new work.
+    nudge: Option<Nudge>,
     /// Reads the tags of a file when a relink needs them (replaced in tests).
     reader: Reader,
 }
@@ -101,63 +82,10 @@ type Reader = fn(&Path) -> Result<FileFacts, String>;
 impl Default for Hasher {
     fn default() -> Hasher {
         Hasher {
-            shared: Arc::default(),
+            gate: WorkGate::default(),
+            nudge: None,
             reader: read_isolated,
         }
-    }
-}
-
-/// Pauses and resumes the hashing of a library, from another thread.
-#[derive(Clone, Debug)]
-pub struct HasherHandle {
-    shared: Arc<Shared>,
-}
-
-impl HasherHandle {
-    /// No track of `library` is hashed until [`HasherHandle::resume`]. A track being
-    /// hashed finishes first: this call waits for it, so when it returns the hasher is
-    /// not touching the library. Do not call it from the hasher's own thread.
-    pub fn pause(&self, library: LibraryId) {
-        let mut state = self.shared.lock();
-        state.paused.insert(library);
-        while state.busy == Some(library) {
-            state = self
-                .shared
-                .idle
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    /// Hashing of `library` goes on.
-    pub fn resume(&self, library: LibraryId) {
-        self.shared.lock().paused.remove(&library);
-    }
-
-    pub fn is_paused(&self, library: LibraryId) -> bool {
-        self.shared.lock().paused.contains(&library)
-    }
-}
-
-/// Marks a library busy for as long as it lives, also when the hashing panics.
-struct Busy<'a>(&'a Shared);
-
-impl<'a> Busy<'a> {
-    /// `None` if `library` is paused.
-    fn enter(shared: &'a Shared, library: LibraryId) -> Option<Busy<'a>> {
-        let mut state = shared.lock();
-        if state.paused.contains(&library) {
-            return None;
-        }
-        state.busy = Some(library);
-        Some(Busy(shared))
-    }
-}
-
-impl Drop for Busy<'_> {
-    fn drop(&mut self) {
-        self.0.lock().busy = None;
-        self.0.idle.notify_all();
     }
 }
 
@@ -200,10 +128,15 @@ impl Hasher {
         Hasher::default()
     }
 
-    pub fn handle(&self) -> HasherHandle {
-        HasherHandle {
-            shared: Arc::clone(&self.shared),
-        }
+    /// Wakes the fingerprinter after each batch that hashed tracks.
+    pub fn with_nudge(mut self, nudge: Nudge) -> Hasher {
+        self.nudge = Some(nudge);
+        self
+    }
+
+    /// The gate that pauses and resumes the hashing of a library from another thread.
+    pub fn handle(&self) -> WorkGate {
+        self.gate.clone()
     }
 
     /// Hashes the pending tracks until `stop` is cancelled, looking for new work every
@@ -244,7 +177,7 @@ impl Hasher {
         let mut report = HashReport::default();
         let mut last = 0;
         while !stop.is_cancelled() {
-            let paused: Vec<LibraryId> = self.shared.lock().paused.iter().copied().collect();
+            let paused: Vec<LibraryId> = self.gate.paused_libraries();
             let batch = match db.read_blocking(|c| pending_batch(c, last, &paused)) {
                 Ok(batch) => batch,
                 Err(err) => {
@@ -256,13 +189,14 @@ impl Hasher {
                 break;
             };
             last = end;
+            let hashed_before = report.hashed;
             let mut roots: HashMap<LibraryId, Option<PathBuf>> = HashMap::new();
             for job in &batch {
                 if stop.is_cancelled() {
                     break;
                 }
                 // Held until the track is done: a pause waits for it.
-                let Some(_busy) = Busy::enter(&self.shared, job.library) else {
+                let Some(_busy) = self.gate.enter(job.library) else {
                     continue;
                 };
                 let root = roots.entry(job.library).or_insert_with(|| {
@@ -292,6 +226,11 @@ impl Hasher {
                         report.skipped += 1;
                     }
                 }
+            }
+            if report.hashed > hashed_before
+                && let Some(nudge) = &self.nudge
+            {
+                nudge.nudge();
             }
         }
         report
@@ -690,6 +629,8 @@ fn merge_personal_data(tx: &Transaction<'_>, from: i64, to: i64) -> armonika_cor
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Condvar, Mutex};
+
     use super::*;
 
     #[test]

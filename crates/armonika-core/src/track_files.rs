@@ -186,7 +186,7 @@ fn write_columns(
            mb_recording_id = ?34, mb_release_track_id = ?35, mb_release_id = ?36,
            mb_release_group_id = ?37, mb_work_id = ?38, updated_at = ?39,
            artists_tag = ?40, album_artists_tag = ?41, mb_artist_ids = ?42,
-           mb_album_artist_ids = ?43, album_title_norm = ?44
+           mb_album_artist_ids = ?43, album_title_norm = ?44, isrcs = ?45, id3v2_major = ?46
          WHERE id = ?1",
     )?
     .execute(params![
@@ -236,6 +236,8 @@ fn write_columns(
         join_values(&t.mb_artist_ids),
         join_values(&t.mb_album_artist_ids),
         t.album_title.as_deref().map(normalize),
+        join_values(&t.isrcs),
+        t.id3v2_major,
     ])?;
     tx.prepare_cached("DELETE FROM track_genres WHERE track_id = ?1")?
         .execute([key])?;

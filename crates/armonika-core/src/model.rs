@@ -85,6 +85,11 @@ pub struct TagFacts {
     pub mb_work_id: Option<String>,
     pub mb_artist_ids: Vec<String>,
     pub mb_album_artist_ids: Vec<String>,
+    /// ISRCs: upper case, without hyphens, only well-formed codes, no duplicates.
+    pub isrcs: Vec<String>,
+    /// Major version (3 or 4) of the ID3v2 header at the start of an mp3 file; `None`
+    /// for other formats and for mp3 files that do not start with an ID3v2 header.
+    pub id3v2_major: Option<u8>,
 }
 
 /// Everything the scanner learns from one file.
