@@ -4,5 +4,6 @@
 
 pub mod content_hash;
 pub mod cover;
+pub mod fingerprint;
 pub mod probe;
 pub mod transcode;
