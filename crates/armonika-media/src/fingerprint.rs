@@ -9,7 +9,10 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use rusty_chromaprint::{Configuration, FingerprintCompressor, Fingerprinter};
@@ -26,6 +29,12 @@ pub const FINGERPRINT_SECONDS: u32 = 120;
 
 /// Less audio than this cannot give a useful fingerprint.
 const MIN_SECONDS: u32 = 3;
+
+/// How long the ffmpeg fallback may take.
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How much of the ffmpeg error output is kept for the error message.
+const FFMPEG_STDERR_BYTES: u64 = 4096;
 
 /// The largest `moov` box the edit list reader will load.
 const MAX_MOOV_BYTES: u64 = 64 * 1024 * 1024;
@@ -236,26 +245,30 @@ fn decode_symphonia(path: &Path) -> Result<Pcm, FingerprintError> {
                 pcm.rate = spec.rate();
                 pcm.channels = spec.channels().count() as u32;
                 if let Some((media_time, timescale)) = edit {
-                    skip_frames =
-                        (media_time * u64::from(pcm.rate) / u64::from(timescale)) as usize;
+                    skip_frames = media_time
+                        .saturating_mul(u64::from(pcm.rate))
+                        .checked_div(u64::from(timescale))
+                        .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
                 }
                 buf.resize(audio.samples_interleaved(), 0);
                 audio.copy_to_slice_interleaved(&mut buf);
                 pcm.samples.extend_from_slice(&buf);
+                let wanted =
+                    skip_frames.saturating_add(pcm.rate as usize * FINGERPRINT_SECONDS as usize);
+                if pcm.frames() >= wanted {
+                    break;
+                }
             }
             Err(SymError::DecodeError(_)) => {}
             Err(SymError::Unsupported(m)) => return Err(unsupported(path, m)),
             Err(e) => return Err(decode_error(path, format!("decode: {e}"))),
-        }
-        if pcm.frames() >= skip_frames + pcm.rate as usize * FINGERPRINT_SECONDS as usize {
-            break;
         }
     }
     if pcm.samples.is_empty() {
         return Err(decode_error(path, "no samples decoded"));
     }
     let channels = pcm.channels.max(1) as usize;
-    let skip = (skip_frames * channels).min(pcm.samples.len());
+    let skip = skip_frames.saturating_mul(channels).min(pcm.samples.len());
     pcm.samples.drain(..skip);
     pcm.samples
         .truncate(pcm.rate as usize * FINGERPRINT_SECONDS as usize * channels);
@@ -306,6 +319,7 @@ fn decode_opus(path: &Path) -> Result<Pcm, FingerprintError> {
 }
 
 /// Decodes with `ffmpeg` to 44.1 kHz stereo 16-bit PCM, reading only what is needed.
+/// A stuck ffmpeg is killed after [`FFMPEG_TIMEOUT`]; the child is always reaped.
 fn decode_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<Pcm, FingerprintError> {
     const RATE: u32 = 44_100;
     let mut child = Command::new(ffmpeg)
@@ -324,19 +338,57 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<Pcm, FingerprintError> {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| io_error(ffmpeg, e))?;
-    let mut bytes = Vec::new();
     let limit = u64::from(RATE) * u64::from(FINGERPRINT_SECONDS) * 4;
-    if let Some(stdout) = child.stdout.take() {
-        stdout
-            .take(limit)
-            .read_to_end(&mut bytes)
-            .map_err(|e| io_error(path, e))?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(decode_error(path, "ffmpeg has no output"));
+    };
+    let (tx, rx) = mpsc::channel();
+    let audio = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = stdout.take(limit).read_to_end(&mut bytes);
+        let _ = tx.send(());
+        (bytes, read)
+    });
+    let errors = thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut tail = Vec::new();
+        let _ = (&mut stderr)
+            .take(FFMPEG_STDERR_BYTES)
+            .read_to_end(&mut tail);
+        // Keep draining so that ffmpeg never blocks on a full pipe.
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        String::from_utf8_lossy(&tail).trim().to_owned()
+    });
+    let started = Instant::now();
+    let timed_out = rx.recv_timeout(FFMPEG_TIMEOUT).is_err() && !audio.is_finished();
+    if timed_out {
+        let _ = child.kill();
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    let (bytes, read) = audio
+        .join()
+        .unwrap_or_else(|_| (Vec::new(), Err(std::io::Error::other("reader panicked"))));
+    let reached_limit = bytes.len() as u64 >= limit;
+    if reached_limit || read.is_err() {
+        // Stopped on purpose, or the pipe broke: either way the child is done for.
+        let _ = child.kill();
+    }
+    let status = wait_until(&mut child, started + FFMPEG_TIMEOUT);
+    let message = errors.join().unwrap_or_default();
+    if timed_out {
+        return Err(decode_error(
+            path,
+            format!("ffmpeg took more than {} s", FFMPEG_TIMEOUT.as_secs()),
+        ));
+    }
+    read.map_err(|e| io_error(path, e))?;
+    if !reached_limit && !status.is_some_and(|s| s.success()) {
+        return Err(decode_error(path, format!("ffmpeg failed: {message}")));
+    }
     if bytes.is_empty() {
         return Err(decode_error(path, "ffmpeg produced no audio"));
     }
@@ -353,17 +405,31 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<Pcm, FingerprintError> {
     })
 }
 
+/// Waits for the child until `deadline`, then kills it; always reaps it.
+fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                return child.wait().ok();
+            }
+        }
+    }
+}
+
 /// The first non-empty edit of the audio track's edit list (`moov/trak/edts/elst`):
 /// its `media_time` and the track timescale. The `media_time` is the number of samples
 /// to skip: the encoder delay for AAC, 0 for ALAC. Symphonia does not expose the box.
 fn mp4_edit_list_skip(path: &Path) -> Option<(u64, u32)> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
-    let mut pos = 0;
-    while pos + 8 <= len {
+    let mut pos = 0u64;
+    while pos.checked_add(8)? <= len {
         let (kind, start, end) = box_header(&mut file, pos, len)?;
         if &kind == b"moov" {
-            if end - start > MAX_MOOV_BYTES {
+            if end.checked_sub(start)? > MAX_MOOV_BYTES {
                 return None;
             }
             file.seek(SeekFrom::Start(start)).ok()?;
@@ -376,15 +442,16 @@ fn mp4_edit_list_skip(path: &Path) -> Option<(u64, u32)> {
     None
 }
 
-/// Kind, payload start and end of the box at `pos`.
-fn box_header(file: &mut File, pos: u64, len: u64) -> Option<([u8; 4], u64, u64)> {
+/// Kind, payload start and end of the box at `pos`. `end` is always after `pos`, so a
+/// scan that continues from it makes progress.
+fn box_header<F: Read + Seek>(file: &mut F, pos: u64, len: u64) -> Option<([u8; 4], u64, u64)> {
     file.seek(SeekFrom::Start(pos)).ok()?;
     let mut head = [0u8; 8];
     file.read_exact(&mut head).ok()?;
     let size = u64::from(u32::from_be_bytes([head[0], head[1], head[2], head[3]]));
     let kind = [head[4], head[5], head[6], head[7]];
     let (header, size) = match size {
-        0 => (8, len - pos),
+        0 => (8, len.checked_sub(pos)?),
         1 => {
             let mut big = [0u8; 8];
             file.read_exact(&mut big).ok()?;
@@ -392,10 +459,11 @@ fn box_header(file: &mut File, pos: u64, len: u64) -> Option<([u8; 4], u64, u64)
         }
         n => (8, n),
     };
-    if size < header || pos + size > len {
+    let end = pos.checked_add(size)?;
+    if size < header || end > len {
         return None;
     }
-    Some((kind, pos + header, pos + size))
+    Some((kind, pos + header, end))
 }
 
 /// Child boxes of `data` as (kind, payload).
@@ -486,5 +554,65 @@ mod tests {
             mp4_edit_list_skip(&path)
         );
         assert!((got - expected).abs() <= 1024, "{got} vs {expected}");
+    }
+
+    #[test]
+    fn a_wrapping_box_size_ends_the_scan() {
+        use std::io::Cursor;
+        // A box with a 64-bit size that wraps around when added to its position.
+        let mut data = vec![0u8; 8];
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&u64::MAX.to_be_bytes());
+        let len = data.len() as u64;
+        assert!(box_header(&mut Cursor::new(&data), 8, len).is_none());
+        // And a size smaller than the header cannot stand still either.
+        let mut tiny = Vec::new();
+        tiny.extend_from_slice(&4u32.to_be_bytes());
+        tiny.extend_from_slice(b"free");
+        assert!(box_header(&mut Cursor::new(&tiny), 0, 8).is_none());
+        // Every box a valid header returns ends after its start.
+        let mut ok = Vec::new();
+        ok.extend_from_slice(&16u32.to_be_bytes());
+        ok.extend_from_slice(b"free");
+        ok.extend_from_slice(&[0u8; 8]);
+        let (_, start, end) = box_header(&mut Cursor::new(&ok), 0, 16).unwrap();
+        assert!(end > 0 && start <= end);
+    }
+
+    fn ffmpeg_on_path() -> Option<PathBuf> {
+        let name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
+    }
+
+    #[test]
+    fn ffmpeg_fallback_decodes_a_fixture() {
+        let Some(ffmpeg) = ffmpeg_on_path() else {
+            eprintln!("skipped: ffmpeg is not on PATH");
+            return;
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.flac");
+        let pcm = decode_ffmpeg(&ffmpeg, &path).unwrap();
+        assert_eq!(pcm.channels, 2);
+        assert!((pcm.frames() as i64 - 4 * 44_100).abs() <= 2048);
+    }
+
+    #[test]
+    fn ffmpeg_fallback_failure_is_a_clean_error() {
+        let Some(ffmpeg) = ffmpeg_on_path() else {
+            eprintln!("skipped: ffmpeg is not on PATH");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-audio.m4a");
+        std::fs::write(&path, vec![7u8; 4096]).unwrap();
+        let err = fingerprint(&path, Some(&ffmpeg)).unwrap_err();
+        assert!(!matches!(err, FingerprintError::Io { .. }), "{err}");
     }
 }

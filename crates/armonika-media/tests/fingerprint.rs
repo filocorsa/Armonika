@@ -224,3 +224,46 @@ fn matches_spike_fingerprints() {
     }
     eprintln!("{} files, worst {worst:.2}%", rows.len());
 }
+
+#[test]
+fn a_bad_first_audio_frame_does_not_abort_the_file() {
+    let mut bytes = std::fs::read(fixture("tone.mp3")).unwrap();
+    // The first real audio frame starts at 202 (frame 20 is the Info frame).
+    for b in &mut bytes[206..358] {
+        *b = 0xAA;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad-first-frame.mp3");
+    std::fs::write(&path, bytes).unwrap();
+    let fp = fingerprint(&path, None).unwrap();
+    assert!(!fp.fingerprint.is_empty());
+}
+
+fn ffmpeg_on_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+#[test]
+fn unsupported_codec_falls_back_to_ffmpeg() {
+    let Some(ffmpeg) = ffmpeg_on_path() else {
+        eprintln!("skipped: ffmpeg is not on PATH");
+        return;
+    };
+    let mut bytes = std::fs::read(fixture("tone.m4a")).unwrap();
+    let at = bytes.windows(4).position(|w| w == b"mp4a").unwrap();
+    bytes[at..at + 4].copy_from_slice(b"zzzz");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("odd.m4a");
+    std::fs::write(&path, bytes).unwrap();
+    // Symphonia refuses the sample entry; ffmpeg reads the codec from the esds box.
+    let fp = fingerprint(&path, Some(&ffmpeg)).unwrap();
+    assert_eq!(fp.decoder, Decoder::Ffmpeg);
+    assert!(!fp.fingerprint.is_empty());
+}
