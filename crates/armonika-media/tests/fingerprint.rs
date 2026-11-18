@@ -267,3 +267,20 @@ fn unsupported_codec_falls_back_to_ffmpeg() {
     assert_eq!(fp.decoder, Decoder::Ffmpeg);
     assert!(!fp.fingerprint.is_empty());
 }
+
+#[test]
+fn ogg_opus_named_ogg_is_decoded_without_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("really-opus.ogg");
+    std::fs::copy(fixture("tone.opus"), &path).unwrap();
+    let fp = fingerprint(&path, None).unwrap();
+    assert_eq!(fp.decoder, Decoder::OpusPure);
+    let reference = fingerprint(&fixture("tone.opus"), None).unwrap();
+    assert_eq!(fp.fingerprint, reference.fingerprint);
+}
+
+#[test]
+fn ogg_vorbis_named_ogg_still_uses_symphonia() {
+    let fp = fingerprint(&fixture("tone.ogg"), None).unwrap();
+    assert_eq!(fp.decoder, Decoder::Symphonia);
+}

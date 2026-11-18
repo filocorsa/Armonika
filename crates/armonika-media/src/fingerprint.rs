@@ -21,7 +21,7 @@ use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
 /// Seconds of audio fingerprinted, like `fpcalc`.
@@ -79,7 +79,7 @@ pub enum FingerprintError {
     TooShort(PathBuf),
 }
 
-/// Interleaved 16-bit PCM.
+/// Interleaved 16-bit PCM, as the ffmpeg fallback returns it (bounded: about 21 MB).
 pub(crate) struct Pcm {
     pub samples: Vec<i16>,
     pub rate: u32,
@@ -88,9 +88,121 @@ pub(crate) struct Pcm {
 
 impl Pcm {
     /// Samples per channel.
+    #[cfg(test)]
     pub(crate) fn frames(&self) -> usize {
         self.samples.len() / self.channels.max(1) as usize
     }
+}
+
+/// Feeds decoded audio to Chromaprint packet by packet, so that the 120 seconds are
+/// never held in memory at once: it drops the frames to skip, keeps the first
+/// [`FINGERPRINT_SECONDS`] and counts the frames for the length check.
+struct Feed {
+    printer: Option<Fingerprinter>,
+    rate: u32,
+    channels: usize,
+    /// Frames at the start still to drop (the encoder delay of an m4a).
+    skip_frames: usize,
+    limit_frames: usize,
+    /// Frames fed to the printer so far.
+    kept: usize,
+    /// Frames received, the dropped ones included.
+    received: usize,
+}
+
+impl Feed {
+    fn new() -> Feed {
+        Feed {
+            printer: None,
+            rate: 0,
+            channels: 1,
+            skip_frames: 0,
+            limit_frames: 0,
+            kept: 0,
+            received: 0,
+        }
+    }
+
+    fn started(&self) -> bool {
+        self.printer.is_some()
+    }
+
+    /// Starts the printer, once the rate and the channels are known.
+    fn start(
+        &mut self,
+        path: &Path,
+        rate: u32,
+        channels: u32,
+        skip_frames: usize,
+    ) -> Result<(), FingerprintError> {
+        let mut printer = Fingerprinter::new(&Configuration::preset_test2());
+        printer
+            .start(rate, channels)
+            .map_err(|e| decode_error(path, e))?;
+        self.printer = Some(printer);
+        self.rate = rate;
+        self.channels = channels.max(1) as usize;
+        self.skip_frames = skip_frames;
+        self.limit_frames = rate as usize * FINGERPRINT_SECONDS as usize;
+        Ok(())
+    }
+
+    /// Consumes interleaved samples; true once the 120 seconds are in.
+    fn push(&mut self, samples: &[i16]) -> bool {
+        let Some(printer) = self.printer.as_mut() else {
+            return false;
+        };
+        let channels = self.channels;
+        let frames = samples.len() / channels;
+        self.received += frames;
+        let dropped = self.skip_frames.min(frames);
+        self.skip_frames -= dropped;
+        let take = (frames - dropped).min(self.limit_frames - self.kept);
+        printer.consume(&samples[dropped * channels..(dropped + take) * channels]);
+        self.kept += take;
+        self.kept >= self.limit_frames
+    }
+
+    /// The fingerprint of what was fed.
+    fn finish(self, path: &Path) -> Result<String, FingerprintError> {
+        let Some(mut printer) = self.printer.filter(|_| self.received > 0) else {
+            return Err(decode_error(path, "no samples decoded"));
+        };
+        if self.kept < (self.rate * MIN_SECONDS) as usize {
+            return Err(FingerprintError::TooShort(path.to_path_buf()));
+        }
+        printer.finish();
+        let config = Configuration::preset_test2();
+        let bytes = FingerprintCompressor::from(&config).compress(printer.fingerprint());
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    }
+}
+
+impl FingerprintError {
+    /// What went wrong, without the path of the file: fit to be stored for the audio,
+    /// which several files can share.
+    pub fn reason(&self) -> String {
+        match self {
+            FingerprintError::Io { source, .. } => format!("cannot read: {source}"),
+            FingerprintError::Unsupported { message, .. } => format!("not supported: {message}"),
+            FingerprintError::Decode { message, .. } => format!("cannot decode: {message}"),
+            FingerprintError::TooShort(_) => {
+                format!("less than {MIN_SECONDS} seconds of audio")
+            }
+        }
+    }
+
+    /// The error says nothing about the audio: a read that failed (a share that went
+    /// away, a file in use) or a program that could not be started. Do not store it
+    /// as the outcome for the file; try again later.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, FingerprintError::Io { .. })
+    }
+}
+
+/// The ffmpeg program to use: the configured one, or `ffmpeg` from `PATH`.
+pub fn ffmpeg_or_default(configured: Option<PathBuf>) -> PathBuf {
+    configured.unwrap_or_else(|| PathBuf::from("ffmpeg"))
 }
 
 /// Fingerprints the first [`FINGERPRINT_SECONDS`] of the file. `ffmpeg`, when given,
@@ -99,18 +211,22 @@ pub fn fingerprint(
     path: &Path,
     ffmpeg: Option<&Path>,
 ) -> Result<AudioFingerprint, FingerprintError> {
-    let (pcm, decoder) = match (decode_pcm(path), ffmpeg) {
-        (Err(FingerprintError::Unsupported { .. }), Some(ffmpeg)) => (
-            isolated(path, || decode_ffmpeg(ffmpeg, path))?,
-            Decoder::Ffmpeg,
-        ),
+    let mut feed = Feed::new();
+    let decoder = match (decode_into(path, &mut feed), ffmpeg) {
+        (Err(FingerprintError::Unsupported { .. }), Some(ffmpeg)) => {
+            feed = Feed::new();
+            isolated(path, || {
+                let pcm = decode_ffmpeg(ffmpeg, path)?;
+                feed.start(path, pcm.rate, pcm.channels, 0)?;
+                feed.push(&pcm.samples);
+                Ok(())
+            })?;
+            Decoder::Ffmpeg
+        }
         (Err(e), _) => return Err(e),
-        (Ok(decoded), _) => decoded,
+        (Ok(decoder), _) => decoder,
     };
-    if pcm.frames() < (pcm.rate * MIN_SECONDS) as usize {
-        return Err(FingerprintError::TooShort(path.to_path_buf()));
-    }
-    let fingerprint = isolated(path, || chromaprint(path, &pcm))?;
+    let fingerprint = isolated(path, || feed.finish(path))?;
     Ok(AudioFingerprint {
         fingerprint,
         decoder,
@@ -137,18 +253,6 @@ fn isolated<T>(
             ))
         }
     }
-}
-
-fn chromaprint(path: &Path, pcm: &Pcm) -> Result<String, FingerprintError> {
-    let config = Configuration::preset_test2();
-    let mut printer = Fingerprinter::new(&config);
-    printer
-        .start(pcm.rate, pcm.channels)
-        .map_err(|e| decode_error(path, e))?;
-    printer.consume(&pcm.samples);
-    printer.finish();
-    let bytes = FingerprintCompressor::from(&config).compress(printer.fingerprint());
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn extension(path: &Path) -> String {
@@ -178,21 +282,71 @@ fn unsupported(path: &Path, message: impl std::fmt::Display) -> FingerprintError
     }
 }
 
-/// Decodes at most [`FINGERPRINT_SECONDS`] of audio, isolated against panics.
-pub(crate) fn decode_pcm(path: &Path) -> Result<(Pcm, Decoder), FingerprintError> {
-    if extension(path) == "opus" {
-        let pcm = isolated(path, || decode_opus(path))?;
-        return Ok((pcm, Decoder::OpusPure));
-    }
-    let pcm = isolated(path, || decode_symphonia(path))?;
-    Ok((pcm, Decoder::Symphonia))
+/// A read error of the audio source. The end of the stream is the normal end of the
+/// audio and is handled by the callers before this.
+fn is_read_failure(e: &std::io::Error) -> bool {
+    e.kind() != std::io::ErrorKind::UnexpectedEof
 }
 
-fn decode_symphonia(path: &Path) -> Result<Pcm, FingerprintError> {
+fn symphonia_error(path: &Path, what: &str, e: SymError) -> FingerprintError {
+    match e {
+        SymError::IoError(e) if is_read_failure(&e) => io_error(path, e),
+        e => decode_error(path, format!("{what}: {e}")),
+    }
+}
+
+fn opus_error(path: &Path, e: opus_pure::Error) -> FingerprintError {
+    match e {
+        opus_pure::Error::Io(e) if is_read_failure(&e) => io_error(path, e),
+        e => decode_error(path, e),
+    }
+}
+
+/// Decodes at most [`FINGERPRINT_SECONDS`] of audio into `feed`, isolated against
+/// panics. An Ogg file Symphonia has no decoder for is tried as Ogg Opus, whatever its
+/// extension.
+fn decode_into(path: &Path, feed: &mut Feed) -> Result<Decoder, FingerprintError> {
+    if extension(path) == "opus" {
+        isolated(path, || decode_opus(path, feed))?;
+        return Ok(Decoder::OpusPure);
+    }
+    match isolated(path, || decode_symphonia(path, feed)) {
+        Ok(()) => Ok(Decoder::Symphonia),
+        Err(first @ FingerprintError::Unsupported { .. }) if is_ogg(path) => {
+            *feed = Feed::new();
+            match isolated(path, || decode_opus(path, feed)) {
+                Ok(()) => Ok(Decoder::OpusPure),
+                // Not Opus either: the first error stands, unless this one is transient.
+                Err(e) if e.is_transient() => Err(e),
+                Err(_) => Err(first),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether the file starts with the Ogg capture pattern.
+fn is_ogg(path: &Path) -> bool {
+    let mut head = [0u8; 4];
+    File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && &head == b"OggS"
+}
+
+fn decode_symphonia(path: &Path, feed: &mut Feed) -> Result<(), FingerprintError> {
+    let file = File::open(path).map_err(|e| io_error(path, e))?;
+    decode_symphonia_from(path, Box::new(file), feed)
+}
+
+fn decode_symphonia_from(
+    path: &Path,
+    source: Box<dyn MediaSource>,
+    feed: &mut Feed,
+) -> Result<(), FingerprintError> {
     let mut registry = CodecRegistry::new();
     symphonia::default::register_enabled_codecs(&mut registry);
-    let file = File::open(path).map_err(|e| io_error(path, e))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mss = MediaSourceStream::new(source, Default::default());
     let mut hint = Hint::new();
     hint.with_extension(&extension(path));
     let mut format = symphonia::default::get_probe()
@@ -204,7 +358,7 @@ fn decode_symphonia(path: &Path) -> Result<Pcm, FingerprintError> {
         )
         .map_err(|e| match e {
             SymError::Unsupported(m) => unsupported(path, m),
-            e => decode_error(path, format!("probe: {e}")),
+            e => symphonia_error(path, "probe", e),
         })?;
     let track = format
         .default_track(TrackType::Audio)
@@ -222,19 +376,13 @@ fn decode_symphonia(path: &Path) -> Result<Pcm, FingerprintError> {
         "m4a" | "mp4" | "m4b" => mp4_edit_list_skip(path),
         _ => None,
     };
-    let mut pcm = Pcm {
-        samples: Vec::new(),
-        rate: 0,
-        channels: 0,
-    };
     let mut buf: Vec<i16> = Vec::new();
-    let mut skip_frames = 0usize;
     loop {
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(decode_error(path, format!("read packet: {e}"))),
+            Err(e) => return Err(symphonia_error(path, "read packet", e)),
         };
         if packet.track_id != track_id {
             continue;
@@ -242,80 +390,70 @@ fn decode_symphonia(path: &Path) -> Result<Pcm, FingerprintError> {
         match decoder.decode(&packet) {
             Ok(audio) => {
                 let spec = audio.spec();
-                pcm.rate = spec.rate();
-                pcm.channels = spec.channels().count() as u32;
-                if let Some((media_time, timescale)) = edit {
-                    skip_frames = media_time
-                        .saturating_mul(u64::from(pcm.rate))
-                        .checked_div(u64::from(timescale))
-                        .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+                if !feed.started() {
+                    let rate = spec.rate();
+                    let skip = edit.map_or(0, |(media_time, timescale)| {
+                        media_time
+                            .saturating_mul(u64::from(rate))
+                            .checked_div(u64::from(timescale))
+                            .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX))
+                    });
+                    feed.start(path, rate, spec.channels().count() as u32, skip)?;
                 }
                 buf.resize(audio.samples_interleaved(), 0);
                 audio.copy_to_slice_interleaved(&mut buf);
-                pcm.samples.extend_from_slice(&buf);
-                let wanted =
-                    skip_frames.saturating_add(pcm.rate as usize * FINGERPRINT_SECONDS as usize);
-                if pcm.frames() >= wanted {
+                if feed.push(&buf) {
                     break;
                 }
             }
             Err(SymError::DecodeError(_)) => {}
             Err(SymError::Unsupported(m)) => return Err(unsupported(path, m)),
-            Err(e) => return Err(decode_error(path, format!("decode: {e}"))),
+            Err(e) => return Err(symphonia_error(path, "decode", e)),
         }
     }
-    if pcm.samples.is_empty() {
-        return Err(decode_error(path, "no samples decoded"));
-    }
-    let channels = pcm.channels.max(1) as usize;
-    let skip = skip_frames.saturating_mul(channels).min(pcm.samples.len());
-    pcm.samples.drain(..skip);
-    pcm.samples
-        .truncate(pcm.rate as usize * FINGERPRINT_SECONDS as usize * channels);
-    Ok(pcm)
+    Ok(())
 }
 
 fn f32_to_i16(x: f32) -> i16 {
     (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16
 }
 
-fn decode_opus(path: &Path) -> Result<Pcm, FingerprintError> {
+fn decode_opus(path: &Path, feed: &mut Feed) -> Result<(), FingerprintError> {
+    let file = File::open(path).map_err(|e| io_error(path, e))?;
+    decode_opus_from(path, BufReader::new(file), feed)
+}
+
+fn decode_opus_from<R: Read + Seek>(
+    path: &Path,
+    source: R,
+    feed: &mut Feed,
+) -> Result<(), FingerprintError> {
     use opus_pure::{MAX_PACKET_SAMPLES, OggOpusReader, Trim};
     const RATE: i32 = 48_000;
-    let file = File::open(path).map_err(|e| io_error(path, e))?;
-    let mut reader = OggOpusReader::new(BufReader::new(file)).map_err(|e| decode_error(path, e))?;
+    let mut reader = OggOpusReader::new(source).map_err(|e| opus_error(path, e))?;
     let channels = reader.head().channel_count as usize;
     let mut decoder = reader
         .head()
         .decoder(RATE)
-        .map_err(|e| decode_error(path, e))?;
-    let mut trim = Trim::new(reader.head(), RATE, channels).map_err(|e| decode_error(path, e))?;
+        .map_err(|e| opus_error(path, e))?;
+    let mut trim = Trim::new(reader.head(), RATE, channels).map_err(|e| opus_error(path, e))?;
     let mut block = vec![0.0f32; MAX_PACKET_SAMPLES * channels];
-    let mut pcm = Pcm {
-        samples: Vec::new(),
-        rate: RATE as u32,
-        channels: channels as u32,
-    };
-    let limit = RATE as usize * FINGERPRINT_SECONDS as usize * channels;
+    feed.start(path, RATE as u32, channels as u32, 0)?;
     for packet in reader.packets() {
-        let packet = packet.map_err(|e| decode_error(path, e))?;
+        let packet = packet.map_err(|e| opus_error(path, e))?;
         let n = decoder
             .decode(&packet.data, MAX_PACKET_SAMPLES, &mut block)
-            .map_err(|e| decode_error(path, e))?;
-        pcm.samples.extend(
-            trim.keep(&packet, &block[..n * channels])
-                .iter()
-                .map(|&x| f32_to_i16(x)),
-        );
-        if pcm.samples.len() >= limit {
+            .map_err(|e| opus_error(path, e))?;
+        let chunk: Vec<i16> = trim
+            .keep(&packet, &block[..n * channels])
+            .iter()
+            .map(|&x| f32_to_i16(x))
+            .collect();
+        if feed.push(&chunk) {
             break;
         }
     }
-    if pcm.samples.is_empty() {
-        return Err(decode_error(path, "no samples decoded"));
-    }
-    pcm.samples.truncate(limit);
-    Ok(pcm)
+    Ok(())
 }
 
 /// Decodes with `ffmpeg` to 44.1 kHz stereo 16-bit PCM, reading only what is needed.
@@ -387,6 +525,8 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path) -> Result<Pcm, FingerprintError> {
     }
     read.map_err(|e| io_error(path, e))?;
     if !reached_limit && !status.is_some_and(|s| s.success()) {
+        // ffmpeg names the file in its messages: keep the reason free of the path.
+        let message = message.replace(&path.display().to_string(), "<file>");
         return Err(decode_error(path, format!("ffmpeg failed: {message}")));
     }
     if bytes.is_empty() {
@@ -545,15 +685,114 @@ mod tests {
     #[test]
     fn m4a_edit_list_priming_is_skipped() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.m4a");
-        let (m4a, _) = decode_pcm(&path).unwrap();
+        let mut feed = Feed::new();
+        decode_into(&path, &mut feed).unwrap();
         // The fixture is 4 s of mono audio at 44.1 kHz, like the WAV of the same tone.
         let expected = 4 * 44_100_i64;
-        let got = m4a.frames() as i64;
+        let got = feed.kept as i64;
         eprintln!(
             "m4a frames {got}, expected {expected}, edit {:?}",
             mp4_edit_list_skip(&path)
         );
         assert!((got - expected).abs() <= 1024, "{got} vs {expected}");
+    }
+
+    /// A reader that works for `ok` bytes and then fails, like a share that goes away.
+    struct FailAfter {
+        inner: std::io::Cursor<Vec<u8>>,
+        ok: u64,
+    }
+
+    impl FailAfter {
+        fn fixture(name: &str, ok: u64) -> FailAfter {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name);
+            FailAfter {
+                inner: std::io::Cursor::new(std::fs::read(path).unwrap()),
+                ok,
+            }
+        }
+    }
+
+    impl Read for FailAfter {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let left = self.ok.saturating_sub(self.inner.position());
+            if left == 0 {
+                return Err(std::io::Error::other("the share went away"));
+            }
+            let cap = buf.len().min(left as usize);
+            self.inner.read(&mut buf[..cap])
+        }
+    }
+
+    impl Seek for FailAfter {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    impl MediaSource for FailAfter {
+        fn is_seekable(&self) -> bool {
+            true
+        }
+        fn byte_len(&self) -> Option<u64> {
+            Some(self.inner.get_ref().len() as u64)
+        }
+    }
+
+    #[test]
+    fn a_read_failure_mid_stream_is_transient() {
+        let path = Path::new("tone.mp3");
+        for ok in [64, 2048] {
+            let mut feed = Feed::new();
+            let err = decode_symphonia_from(
+                path,
+                Box::new(FailAfter::fixture("tone.mp3", ok)),
+                &mut feed,
+            )
+            .unwrap_err();
+            assert!(err.is_transient(), "{ok}: {err}");
+        }
+        let mut feed = Feed::new();
+        let err = decode_opus_from(
+            Path::new("tone.opus"),
+            FailAfter::fixture("tone.opus", 1500),
+            &mut feed,
+        )
+        .unwrap_err();
+        assert!(err.is_transient(), "{err}");
+    }
+
+    #[test]
+    fn a_reason_names_no_path() {
+        let path = PathBuf::from("/music/secret/song.flac");
+        let errors = [
+            io_error(&path, std::io::Error::other("gone")),
+            decode_error(&path, "bad frame"),
+            unsupported(&path, "codec"),
+            FingerprintError::TooShort(path.clone()),
+        ];
+        for e in errors {
+            let reason = e.reason();
+            assert!(!reason.is_empty() && !reason.contains("secret"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn only_io_is_transient() {
+        let path = PathBuf::from("a");
+        assert!(io_error(&path, std::io::Error::other("x")).is_transient());
+        assert!(!decode_error(&path, "x").is_transient());
+        assert!(!unsupported(&path, "x").is_transient());
+        assert!(!FingerprintError::TooShort(path).is_transient());
+    }
+
+    #[test]
+    fn ffmpeg_defaults_to_the_one_on_path() {
+        assert_eq!(ffmpeg_or_default(None), PathBuf::from("ffmpeg"));
+        let own = PathBuf::from("/opt/ffmpeg");
+        assert_eq!(ffmpeg_or_default(Some(own.clone())), own);
     }
 
     #[test]
