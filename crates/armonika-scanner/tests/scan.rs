@@ -652,3 +652,53 @@ fn fresh_empty_library_scans_without_the_guard() {
     assert_eq!(lib.scan_allow_empty().missing, 1);
     assert!(!lib.scan().empty_root_guard);
 }
+
+#[test]
+fn isrc_and_id3_version_are_stored() {
+    let lib = Lib::new();
+    tagged_file(
+        lib.root(),
+        "a.mp3",
+        AudioFormat::Mp3,
+        &FixtureTags {
+            title: Some("One".to_owned()),
+            isrcs: vec!["us-s1z-99-00001;GBAYE0601498".to_owned()],
+            id3v23: true,
+            ..FixtureTags::default()
+        },
+    );
+    tagged_file(
+        lib.root(),
+        "b.flac",
+        AudioFormat::Flac,
+        &FixtureTags::default(),
+    );
+    lib.scan();
+    let row = |rel: &str| -> (Option<String>, Option<i64>) {
+        lib.db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT isrcs, id3v2_major FROM tracks WHERE rel_path = ?1",
+                    [rel],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        row("a.mp3"),
+        (Some("USS1Z9900001\u{1f}GBAYE0601498".to_string()), Some(3))
+    );
+    assert_eq!(row("b.flac"), (None, None));
+}
+
+#[test]
+fn tracks_read_with_schema_1_are_read_again() {
+    let lib = Lib::new();
+    lib.add("a.mp3", "One");
+    lib.add("b.mp3", "Two");
+    lib.scan();
+    lib.exec("UPDATE tracks SET tag_schema = 1");
+    let report = lib.scan();
+    assert_eq!(report.files_read, 2);
+}

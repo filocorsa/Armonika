@@ -62,6 +62,10 @@ pub struct FixtureTags {
     pub mb_work_id: Option<String>,
     pub mb_artist_ids: Vec<String>,
     pub mb_album_artist_ids: Vec<String>,
+    /// ISRCs as raw text (`TSRC`, `ISRC`, `----:com.apple.iTunes:ISRC`), written as is.
+    pub isrcs: Vec<String>,
+    /// Save ID3v2 tags (mp3, wav, aiff) as version 2.3 instead of the default 2.4.
+    pub id3v23: bool,
     /// Embedded front cover (JPEG bytes).
     pub cover: Option<Vec<u8>>,
 }
@@ -184,7 +188,7 @@ fn save_id3v2(native: Id3v2Tag, path: &Path, tags: &FixtureTags) -> anyhow::Resu
             value,
         )));
     }
-    merged.save_to_path(path, WriteOptions::default())?;
+    merged.save_to_path(path, WriteOptions::default().use_id3v23(tags.id3v23))?;
     Ok(())
 }
 
@@ -277,6 +281,7 @@ fn fill(tag: &mut Tag, t: &FixtureTags, track_text: TrackText) {
         ItemKey::MusicBrainzReleaseArtistId,
         &t.mb_album_artist_ids,
     );
+    push_all(tag, ItemKey::Isrc, &t.isrcs);
     if let Some(cover) = &t.cover {
         tag.push_picture(
             Picture::unchecked(cover.clone())
