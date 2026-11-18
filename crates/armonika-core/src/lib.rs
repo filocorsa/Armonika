@@ -6,6 +6,7 @@ pub mod annotations;
 pub mod artists;
 pub mod db;
 mod error;
+pub mod fingerprints;
 pub mod ids;
 pub mod libraries;
 pub mod model;

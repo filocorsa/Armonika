@@ -155,3 +155,25 @@ hash_on_start = true
         Ok(())
     });
 }
+
+#[test]
+fn recognition_section_defaults_and_env() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        assert!(
+            Config::load(None)
+                .unwrap()
+                .recognition
+                .background_fingerprint
+        );
+
+        jail.create_file(
+            "armonika.toml",
+            "[recognition]\nbackground_fingerprint = true\n",
+        )?;
+        jail.set_env("ARMONIKA_RECOGNITION__BACKGROUND_FINGERPRINT", "false");
+        let c = Config::load(None).unwrap();
+        assert!(!c.recognition.background_fingerprint);
+        Ok(())
+    });
+}

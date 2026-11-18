@@ -18,6 +18,8 @@ use armonika_core::ids::LibraryId;
 pub use armonika_core::model::LibraryChange;
 
 pub mod controller;
+pub mod fingerprinter;
+pub mod gate;
 pub mod hasher;
 mod reconcile;
 mod walk;

@@ -1,6 +1,6 @@
 //! The scan controller: at most one scan per library, requests that arrive during a
-//! scan merge into one more scan, and the content hasher runs in the background and
-//! waits while a library is scanned.
+//! scan merge into one more scan, and the content hasher and the fingerprinter run in
+//! the background and wait while a library is scanned.
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -11,7 +11,9 @@ use armonika_core::ids::LibraryId;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::hasher::{Hasher, HasherHandle};
+use crate::fingerprinter::{self, FingerprintOptions};
+use crate::gate::WorkGate;
+use crate::hasher::Hasher;
 use crate::{LibraryChange, ScanError, ScanOptions, ScanProgress, ScanReport, scan_library_until};
 
 /// Where the scans of one library are.
@@ -44,7 +46,9 @@ struct Inner {
     db: Db,
     opts: ScanOptions,
     changes: UnboundedSender<LibraryChange>,
-    hasher: HasherHandle,
+    hasher: WorkGate,
+    /// `None` when the fingerprinter is off.
+    fingerprinter: Option<WorkGate>,
     stop: CancellationToken,
     states: Mutex<BTreeMap<LibraryId, LibraryScanState>>,
 }
@@ -62,13 +66,13 @@ impl Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        // The hasher thread holds no reference to the controller: tell it to end.
+        // The background threads hold no reference to the controller: tell them to end.
         self.stop.cancel();
     }
 }
 
 /// Runs scans on request. Cloning gives another handle to the same controller; when
-/// the last handle (and the last running scan) is gone the hasher stops.
+/// the last handle (and the last running scan) is gone the background threads stop.
 #[derive(Clone)]
 pub struct ScanController {
     inner: Arc<Inner>,
@@ -77,28 +81,32 @@ pub struct ScanController {
 impl ScanController {
     /// A controller that writes to `db` and sends what every committed batch changed
     /// to `changes`. It starts the content hasher on a thread of its own, at low
-    /// priority.
+    /// priority, and, unless `fingerprint` is `None`, the fingerprinter on another.
     pub fn new(
         db: Db,
         opts: ScanOptions,
         changes: UnboundedSender<LibraryChange>,
+        fingerprint: Option<FingerprintOptions>,
     ) -> ScanController {
         let hasher = Hasher::new();
+        let fingerprint_gate = fingerprint.as_ref().map(|_| WorkGate::new());
         let stop = CancellationToken::new();
         let inner = Arc::new(Inner {
             db: db.clone(),
             opts,
             changes: changes.clone(),
             hasher: hasher.handle(),
+            fingerprinter: fingerprint_gate.clone(),
             stop: stop.clone(),
             states: Mutex::default(),
         });
+        let (hasher_db, hasher_stop) = (db.clone(), stop.clone());
         let spawned = std::thread::Builder::new()
             .name("armonika-hasher".to_owned())
             .spawn(move || {
-                lower_priority();
+                lower_priority("hasher");
                 let ran = panic::catch_unwind(AssertUnwindSafe(|| {
-                    hasher.run(db, stop, move |change| {
+                    hasher.run(hasher_db, hasher_stop, move |change| {
                         let _ = changes.send(change);
                     });
                 }));
@@ -108,6 +116,22 @@ impl ScanController {
             });
         if let Err(err) = spawned {
             tracing::error!(error = %err, "cannot start the content hasher");
+        }
+        if let (Some(opts), Some(gate)) = (fingerprint, fingerprint_gate) {
+            let spawned = std::thread::Builder::new()
+                .name("armonika-fingerprint".to_owned())
+                .spawn(move || {
+                    lower_priority("fingerprinter");
+                    let ran = panic::catch_unwind(AssertUnwindSafe(|| {
+                        fingerprinter::run(&db, &opts, &gate, &stop);
+                    }));
+                    if ran.is_err() {
+                        tracing::error!("the fingerprinter panicked and stopped");
+                    }
+                });
+            if let Err(err) = spawned {
+                tracing::error!(error = %err, "cannot start the fingerprinter");
+            }
         }
         ScanController { inner }
     }
@@ -175,9 +199,13 @@ fn run_scans(inner: &Inner, library: LibraryId) {
         inner.update(library, |s| s.files_seen = 0);
         // Waits for the hasher to finish the track it is on, so that the two never
         // work on the same library; resumed also if the scan panics.
+        // Then for the fingerprinter, which needs the hash the hasher writes.
         inner.hasher.pause(library);
+        if let Some(fingerprinter) = &inner.fingerprinter {
+            fingerprinter.pause(library);
+        }
         let outcome = {
-            let _resume = Resume(&inner.hasher, library);
+            let _resume = Resume(&inner.hasher, inner.fingerprinter.as_ref(), library);
             panic::catch_unwind(AssertUnwindSafe(|| {
                 scan_library_until(
                     &inner.db,
@@ -233,20 +261,26 @@ fn run_scans(inner: &Inner, library: LibraryId) {
     }
 }
 
-struct Resume<'a>(&'a HasherHandle, LibraryId);
+/// Resumes the background workers, the fingerprinter first (the reverse of the order
+/// they were paused in).
+struct Resume<'a>(&'a WorkGate, Option<&'a WorkGate>, LibraryId);
 
 impl Drop for Resume<'_> {
     fn drop(&mut self) {
-        self.0.resume(self.1);
+        if let Some(fingerprinter) = self.1 {
+            fingerprinter.resume(self.2);
+        }
+        self.0.resume(self.2);
     }
 }
 
-/// The hasher is background work: it must not slow the scans or playback. A failure
-/// only costs speed, so it is logged at debug level. The crate is safe code only
-/// (`unsafe` is forbidden here); the platform calls are inside `thread-priority`.
-fn lower_priority() {
+/// The hasher and the fingerprinter are background work: they must not slow the scans or
+/// playback. A failure only costs speed, so it is logged at debug level. The crate is
+/// safe code only (`unsafe` is forbidden here); the platform calls are inside
+/// `thread-priority`.
+fn lower_priority(worker: &str) {
     use thread_priority::{ThreadPriority, set_current_thread_priority};
     if let Err(err) = set_current_thread_priority(ThreadPriority::Min) {
-        tracing::debug!(error = ?err, "cannot lower the priority of the hasher thread");
+        tracing::debug!(error = ?err, worker, "cannot lower the priority of a background thread");
     }
 }

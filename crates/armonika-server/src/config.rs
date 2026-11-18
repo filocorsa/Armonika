@@ -31,6 +31,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "transcode",
     "search",
     "listenbrainz",
+    "recognition",
 ];
 
 const DEFAULT_FILE: &str = "armonika.toml";
@@ -52,6 +53,7 @@ pub struct Config {
     pub transcode: TranscodeConfig,
     pub search: SearchConfig,
     pub listenbrainz: ListenBrainzConfig,
+    pub recognition: RecognitionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +97,13 @@ pub struct ListenBrainzConfig {
     pub url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecognitionConfig {
+    /// Compute the audio fingerprints in the background, after the content hash.
+    pub background_fingerprint: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -107,6 +116,7 @@ impl Default for Config {
             transcode: TranscodeConfig::default(),
             search: SearchConfig::default(),
             listenbrainz: ListenBrainzConfig::default(),
+            recognition: RecognitionConfig::default(),
         }
     }
 }
@@ -156,6 +166,14 @@ impl Default for ListenBrainzConfig {
     fn default() -> Self {
         Self {
             url: "https://api.listenbrainz.org".to_string(),
+        }
+    }
+}
+
+impl Default for RecognitionConfig {
+    fn default() -> Self {
+        Self {
+            background_fingerprint: true,
         }
     }
 }
