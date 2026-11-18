@@ -26,7 +26,7 @@ An unknown key in the file, or an unknown key inside a known section in the envi
 | `search.ignored_articles` | `The El La Los Las Le Les Il Lo Gli I` | `ARMONIKA_SEARCH__IGNORED_ARTICLES` | Words, separated by spaces, that are ignored at the start of artist names when sorting. |
 | `listenbrainz.url` | `https://api.listenbrainz.org` | `ARMONIKA_LISTENBRAINZ__URL` | ListenBrainz server for scrobbles. Change it to use a compatible server. Plays are queued and sent in the background; a play still not accepted 14 days after it was played is dropped. |
 
-The content hasher (the background job that computes a fingerprint of each track's audio so that moved and retagged files keep their identity) always runs; it has no setting.
+The content hasher (the background job that computes a hash of each track's audio so that moved and retagged files keep their identity) always runs; it has no setting. It is not the audio fingerprint of `recognition.background_fingerprint`, which is computed afterwards and used to recognize recordings.
 
 Example:
 

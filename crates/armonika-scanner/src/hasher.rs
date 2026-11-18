@@ -38,6 +38,7 @@ use rusqlite::{OptionalExtension, params};
 use tokio_util::sync::CancellationToken;
 
 use crate::LibraryChange;
+use crate::fingerprinter::Nudge;
 use crate::gate::WorkGate;
 use crate::reconcile::{Change, link_new, read_isolated, write_track};
 
@@ -70,6 +71,8 @@ pub struct HashReport {
 #[derive(Clone, Debug)]
 pub struct Hasher {
     gate: WorkGate,
+    /// Woken when tracks got their hash: the fingerprinter has new work.
+    nudge: Option<Nudge>,
     /// Reads the tags of a file when a relink needs them (replaced in tests).
     reader: Reader,
 }
@@ -80,6 +83,7 @@ impl Default for Hasher {
     fn default() -> Hasher {
         Hasher {
             gate: WorkGate::default(),
+            nudge: None,
             reader: read_isolated,
         }
     }
@@ -122,6 +126,12 @@ enum Outcome {
 impl Hasher {
     pub fn new() -> Hasher {
         Hasher::default()
+    }
+
+    /// Wakes the fingerprinter after each batch that hashed tracks.
+    pub fn with_nudge(mut self, nudge: Nudge) -> Hasher {
+        self.nudge = Some(nudge);
+        self
     }
 
     /// The gate that pauses and resumes the hashing of a library from another thread.
@@ -179,6 +189,7 @@ impl Hasher {
                 break;
             };
             last = end;
+            let hashed_before = report.hashed;
             let mut roots: HashMap<LibraryId, Option<PathBuf>> = HashMap::new();
             for job in &batch {
                 if stop.is_cancelled() {
@@ -215,6 +226,11 @@ impl Hasher {
                         report.skipped += 1;
                     }
                 }
+            }
+            if report.hashed > hashed_before
+                && let Some(nudge) = &self.nudge
+            {
+                nudge.nudge();
             }
         }
         report

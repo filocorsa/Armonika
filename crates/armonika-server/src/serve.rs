@@ -5,7 +5,6 @@
 //! controller: a scan of every library, folder watching and periodic rescans.
 
 use std::future::IntoFuture;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,7 +18,7 @@ use armonika_core::libraries;
 use armonika_core::secret::SecretBox;
 use armonika_core::users::{self, BootstrapOutcome};
 use armonika_scanner::controller::ScanController;
-use armonika_scanner::fingerprinter::FingerprintOptions;
+use armonika_scanner::fingerprinter::{FingerprintOptions, ffmpeg_or_default};
 use armonika_scanner::{ScanOptions, watch};
 use armonika_scrobble::listenbrainz::ListenBrainz;
 use armonika_scrobble::{ScrobbleService, ScrobbleSink, outbox};
@@ -264,12 +263,7 @@ async fn start_scanning(
         .background_fingerprint
         .then(|| FingerprintOptions {
             // Like the transcoder: without a configured path, ffmpeg is looked up in PATH.
-            ffmpeg: Some(
-                config
-                    .ffmpeg_path
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("ffmpeg")),
-            ),
+            ffmpeg: Some(ffmpeg_or_default(config.ffmpeg_path.clone())),
         });
     let controller = ScanController::new(db.clone(), opts, changes, fingerprint);
     let libraries = db

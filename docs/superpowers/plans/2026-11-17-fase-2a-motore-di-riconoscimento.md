@@ -325,7 +325,7 @@ git commit -m "scanner: compute audio fingerprints in the background after the c
 
 - [ ] **Step 6: Fine milestone A1**
 
-Revisione dell'intera milestone; push di `phase-2a/a1-fingerprint` e PR in bozza. Il job `bench-smoke` della CI misura con il lavoro in background attivo (`--quiet-timeout-secs 0`): deve restare verde, ed è la verifica del vincolo "non peggiorare le soglie della fase 1".
+Revisione dell'intera milestone; push di `phase-2a/a1-fingerprint` e PR in bozza. Il job `bench-smoke` della CI gira con `--quiet-timeout-secs 600`, e il silenzio di 0,2 s di gen-big si riduce a pochi hash TooShort: non mette sotto sforzo il fingerprinter. La prova del vincolo "non peggiorare le soglie della fase 1" è una corsa locale dell'harness con `--quiet-timeout-secs 0` su una libreria di audio reale e distinto, con i p95 di ricerca e di primo byte nel corpo della PR, prima che la PR esca dalla bozza.
 
 ---
 

@@ -11,7 +11,7 @@ use armonika_core::ids::LibraryId;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::fingerprinter::{self, FingerprintOptions};
+use crate::fingerprinter::{self, FingerprintOptions, Nudge};
 use crate::gate::WorkGate;
 use crate::hasher::Hasher;
 use crate::{LibraryChange, ScanError, ScanOptions, ScanProgress, ScanReport, scan_library_until};
@@ -49,6 +49,8 @@ struct Inner {
     hasher: WorkGate,
     /// `None` when the fingerprinter is off.
     fingerprinter: Option<WorkGate>,
+    /// Wakes the fingerprinter when a scan ends.
+    nudge: Option<Nudge>,
     stop: CancellationToken,
     states: Mutex<BTreeMap<LibraryId, LibraryScanState>>,
 }
@@ -88,8 +90,12 @@ impl ScanController {
         changes: UnboundedSender<LibraryChange>,
         fingerprint: Option<FingerprintOptions>,
     ) -> ScanController {
-        let hasher = Hasher::new();
         let fingerprint_gate = fingerprint.as_ref().map(|_| WorkGate::new());
+        let nudge = fingerprint.as_ref().map(|_| Nudge::new());
+        let hasher = match &nudge {
+            Some(nudge) => Hasher::new().with_nudge(nudge.clone()),
+            None => Hasher::new(),
+        };
         let stop = CancellationToken::new();
         let inner = Arc::new(Inner {
             db: db.clone(),
@@ -97,6 +103,7 @@ impl ScanController {
             changes: changes.clone(),
             hasher: hasher.handle(),
             fingerprinter: fingerprint_gate.clone(),
+            nudge: nudge.clone(),
             stop: stop.clone(),
             states: Mutex::default(),
         });
@@ -117,13 +124,13 @@ impl ScanController {
         if let Err(err) = spawned {
             tracing::error!(error = %err, "cannot start the content hasher");
         }
-        if let (Some(opts), Some(gate)) = (fingerprint, fingerprint_gate) {
+        if let (Some(opts), Some(gate), Some(nudge)) = (fingerprint, fingerprint_gate, nudge) {
             let spawned = std::thread::Builder::new()
                 .name("armonika-fingerprint".to_owned())
                 .spawn(move || {
                     lower_priority("fingerprinter");
                     let ran = panic::catch_unwind(AssertUnwindSafe(|| {
-                        fingerprinter::run(&db, &opts, &gate, &stop);
+                        fingerprinter::run(&db, &opts, &gate, &stop, &nudge);
                     }));
                     if ran.is_err() {
                         tracing::error!("the fingerprinter panicked and stopped");
@@ -198,14 +205,20 @@ fn run_scans(inner: &Inner, library: LibraryId) {
     loop {
         inner.update(library, |s| s.files_seen = 0);
         // Waits for the hasher to finish the track it is on, so that the two never
-        // work on the same library; resumed also if the scan panics.
-        // Then for the fingerprinter, which needs the hash the hasher writes.
+        // work on the same library; resumed also if the scan panics. The fingerprinter
+        // is paused the same way. The plan fixes the order (hasher first, then the
+        // fingerprinter) and the resume runs in reverse.
         inner.hasher.pause(library);
         if let Some(fingerprinter) = &inner.fingerprinter {
             fingerprinter.pause(library);
         }
         let outcome = {
-            let _resume = Resume(&inner.hasher, inner.fingerprinter.as_ref(), library);
+            let _resume = Resume {
+                hasher: &inner.hasher,
+                fingerprinter: inner.fingerprinter.as_ref(),
+                nudge: inner.nudge.as_ref(),
+                library,
+            };
             panic::catch_unwind(AssertUnwindSafe(|| {
                 scan_library_until(
                     &inner.db,
@@ -263,14 +276,23 @@ fn run_scans(inner: &Inner, library: LibraryId) {
 
 /// Resumes the background workers, the fingerprinter first (the reverse of the order
 /// they were paused in).
-struct Resume<'a>(&'a WorkGate, Option<&'a WorkGate>, LibraryId);
+struct Resume<'a> {
+    hasher: &'a WorkGate,
+    fingerprinter: Option<&'a WorkGate>,
+    nudge: Option<&'a Nudge>,
+    library: LibraryId,
+}
 
 impl Drop for Resume<'_> {
     fn drop(&mut self) {
-        if let Some(fingerprinter) = self.1 {
-            fingerprinter.resume(self.2);
+        if let Some(fingerprinter) = self.fingerprinter {
+            fingerprinter.resume(self.library);
         }
-        self.0.resume(self.2);
+        self.hasher.resume(self.library);
+        // The library may have tracks the fingerprinter left while it was paused.
+        if let Some(nudge) = self.nudge {
+            nudge.nudge();
+        }
     }
 }
 
